@@ -1,0 +1,238 @@
+# ScanBase - SBOM Manager Development Rules
+
+## Core Principles
+
+### SOLID & KISS
+- Follow SOLID principles but keep it simple (KISS)
+- Avoid over-engineering - prefer simple, straightforward solutions
+- Code should be easy to understand and maintain
+- Split code into logical modules with single responsibility
+- Use clear, descriptive file and function names
+
+### Code Organization
+- Backend: Use modular structure in `lib/` directory
+  - `lib/db.js` - Database operations and schema
+  - `lib/github.js` - GitHub API client
+  - `lib/osv.js` - OSV.dev API client and vulnerability processing
+  - `lib/sbom.js` - SBOM parsing logic
+  - `lib/auth.js` - Authentication helpers
+  - `lib/utils.js` - Shared utilities (logging, etc.)
+- Frontend: Separate HTML, CSS, and JavaScript
+  - `public/index.html` - HTML structure only
+  - `public/style.css` - All styles with CSS variables
+  - `public/app.js` - Alpine.js application logic
+- Routes: `routes.js` - All API route handlers
+
+### Dependencies
+- Prefer core Node.js features when possible
+- Use established, well-maintained packages when needed:
+  - `express` - HTTP server and routing
+  - `better-sqlite3` - SQLite database
+  - `dotenv` - Environment variable management
+  - `alpinejs` - Frontend reactivity (CDN)
+- Avoid unnecessary dependencies - keep the stack minimal
+
+## Technical Standards
+
+### Node.js
+- Target Node.js v24
+- Use modern JavaScript features (async/await, arrow functions, const/let)
+- Use ES modules or CommonJS consistently
+
+### Database
+- Use `better-sqlite3` for SQLite
+- Initialize schema in `lib/db.js`
+- Use prepared statements for all queries
+- Use transactions for bulk operations
+- Include proper indexes for performance
+- Handle NULL values with COALESCE when needed
+
+### API Design
+- RESTful endpoints under `/api/`
+- Use Express.js for routing
+- Return JSON responses with consistent structure
+- Include proper error handling and status codes
+- Support authentication via cookies (GitHub OAuth)
+
+### Frontend
+- Use Alpine.js for reactivity and state management
+- Keep HTML semantic and accessible
+- Use CSS variables for theming (light/dark mode)
+- Support dark mode via `prefers-color-scheme`
+- Ensure responsive design and good UX
+
+### Styling
+- Use CSS variables for all colors
+- Define variables in `:root` for light mode
+- Override in `@media (prefers-color-scheme: dark)` for dark mode
+- Maintain good contrast ratios for accessibility
+- Use consistent spacing and typography
+
+### Error Handling
+- Always handle errors gracefully
+- Provide meaningful error messages to users
+- Log errors appropriately (use DEBUG flag for verbose logging)
+- Validate input on both client and server
+- Handle edge cases (null values, missing data, etc.)
+
+### Security
+- Require authentication for user-specific data
+- Validate and sanitize all user inputs
+- Use parameterized queries (prepared statements)
+- Handle authentication tokens securely (cookies)
+- Support GitHub OAuth for authentication
+
+## Code Style
+
+### JavaScript
+- Use async/await for asynchronous operations
+- Use descriptive variable and function names
+- Add comments for complex logic
+- Keep functions focused and small
+- Use early returns for error cases
+- Prefer const over let, avoid var
+
+### SQL
+- Use prepared statements
+- Include proper indexes
+- Use COALESCE for NULL handling
+- Group related queries logically
+- Comment complex queries
+
+### CSS
+- Use CSS variables for all values
+- Organize by component/feature
+- Use semantic class names
+- Keep specificity low
+- Support both light and dark modes
+
+### HTML
+- Keep structure semantic
+- Use Alpine.js directives for interactivity
+- Minimize inline styles (use CSS classes)
+- Ensure accessibility (labels, ARIA where needed)
+
+## Features
+
+### SBOM Management
+- Support CycloneDX and SPDX JSON formats
+- Fetch SBOM from GitHub dependency graph API
+- Parse and display dependencies
+- Support scanning from GitHub repositories
+
+### Vulnerability Analysis
+- Integrate with OSV.dev API
+- Support PURL-based queries
+- Infer ecosystem when PURL missing
+- Normalize versions for better matching
+- Batch queries for efficiency
+- Enrich with full vulnerability details when needed
+- Display severity levels (critical, high, medium, low)
+- Show vulnerability counts and details
+
+### Data Persistence
+- Store scans, dependencies, and vulnerabilities in SQLite
+- Maintain history per user and repository
+- Support multiple scans per repository
+- Deduplicate dependencies across scans
+- Load from database when available
+
+### Search
+- Support regex pattern matching across repositories
+- Search in dependency name, version, PURL, and group
+- Show vulnerability information in results
+- Deduplicate results per repository/ref
+- Display repository and scan information
+
+### User Interface
+- Two-page structure: list view and details view
+- Show scanned repositories with statistics
+- Display dependencies in sortable table
+- Show vulnerability details inline
+- Support expanding/collapsing details
+- Color-code by vulnerability severity
+- Provide loading indicators
+- Show summary statistics
+
+## Best Practices
+
+### Performance
+- Use database indexes for common queries
+- Batch API calls when possible
+- Limit query results appropriately
+- Cache when beneficial (database serves as cache)
+
+### Maintainability
+- Keep modules focused on single responsibility
+- Use clear naming conventions
+- Document complex logic
+- Keep functions small and testable
+- Avoid deep nesting
+
+### User Experience
+- Provide clear feedback (loading states, error messages)
+- Make actions intuitive
+- Support keyboard navigation
+- Ensure responsive design
+- Maintain visual consistency
+
+### Testing Considerations
+- Code should be testable (pure functions where possible)
+- Handle edge cases gracefully
+- Validate inputs thoroughly
+- Provide clear error messages
+
+## Project Structure
+
+```
+sbom-manager/
+├── lib/
+│   ├── db.js          # Database operations
+│   ├── github.js      # GitHub API client
+│   ├── osv.js         # OSV API client
+│   ├── sbom.js        # SBOM parsing
+│   ├── auth.js        # Authentication
+│   └── utils.js       # Utilities
+├── public/
+│   ├── index.html     # HTML structure
+│   ├── style.css      # Styles with CSS variables
+│   ├── app.js         # Alpine.js app
+│   └── favicon.svg    # Favicon
+├── routes.js          # API route handlers
+├── server.js          # Express server setup
+├── package.json       # Dependencies
+└── .cursorrules       # This file
+```
+
+## Common Patterns
+
+### API Endpoints
+- GET `/api/repos` - List user's repositories
+- GET `/api/repo` - Fetch SBOM from GitHub
+- GET `/api/load-scan` - Load scan from database
+- POST `/api/vulns` - Check vulnerabilities
+- GET `/api/search-deps` - Search dependencies
+- GET `/api/me` - Get current user
+
+### Database Tables
+- `users` - GitHub user information
+- `repos` - Repository metadata
+- `scans` - Scan history
+- `dependencies` - Dependency records
+- `vulnerabilities` - Vulnerability records
+
+### Frontend State
+- Use Alpine.js `x-data` for component state
+- Keep state minimal and focused
+- Use reactive properties for UI updates
+- Handle loading and error states
+
+## Notes
+
+- The app is called "ScanBase"
+- Supports both authenticated and unauthenticated usage
+- Database is SQLite (sbom.db)
+- Environment variables: PORT, GITHUB_TOKEN, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, DEBUG
+- Brand colors: dark backgrounds (#222, #1a1a1a), blue links (#0a58ca, #60a5fa)
+- Vulnerability colors: critical (red), high (orange), medium (yellow), low (green)
+

@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ScanBase</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="/style.css">
+    <meta name="color-scheme" content="light dark">
+</head>
+<body x-data="sbomApp()" x-init="init()">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h1>ScanBase</h1>
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <span x-show="auth.authenticated && auth.user" style="font-size: 14px; color: #555;">
+                <span x-text="auth.user?.login || ''"></span>
+            </span>
+            <button x-show="!auth.authenticated" @click="login()" class="secondary">Sign in with GitHub</button>
+            <button x-show="auth.authenticated" @click="logout()" class="secondary">Sign out</button>
+        </div>
+    </div>
+    
+    <!-- Page 1: Repos List -->
+    <div x-show="page === 'list'" class="page active" x-transition>
+        <!-- Top section: Scan and Search side by side -->
+        <div class="scan-search-grid" :class="{ 'scan-only': !auth.authenticated }">
+            <!-- Scan New Repository -->
+            <div class="card" :class="{ 'scan-full-width': !auth.authenticated }">
+                <h2 style="margin: 0 0 16px 0; font-size: 16px;">Scan New Repository</h2>
+                <div>
+                    <label for="input">Repository</label>
+                    <input id="input" x-model="input" @keyup.enter="scanRepo()" placeholder="owner/repo[@ref] or https://github.com/owner/repo[/tree/ref]" />
+                    <div class="hint">Examples: <code>owner/repo</code> · <code>owner/repo@main</code> · <code>https://github.com/owner/repo</code></div>
+                </div>
+                <div class="actions" style="margin-top:12px;">
+                    <button @click="scanRepo()" :disabled="loading || !auth.authenticated">Scan Repository</button>
+                </div>
+                <div x-show="!auth.authenticated" class="hint" style="margin-top: 8px;">
+                    Please sign in to scan repositories.
+                </div>
+                <div x-show="status" class="status" :class="{ error: statusError }" x-text="status"></div>
+            </div>
+
+            <!-- Search Dependencies -->
+            <div class="card" x-show="auth.authenticated">
+                <h2 style="margin: 0 0 16px 0; font-size: 16px;">Search Dependencies</h2>
+                <div>
+                    <label for="search-input">Search Pattern (Regex)</label>
+                    <input id="search-input" x-model="searchPattern" @keyup.enter="searchDeps()" placeholder="e.g., ^express|^lodash|react" />
+                    <div class="hint">Search across all scanned repositories. Uses regex pattern matching.</div>
+                </div>
+                <div class="actions" style="margin-top:12px;">
+                    <button @click="searchDeps()" :disabled="loading || !searchPattern || !auth.authenticated">Search</button>
+                    <button x-show="searchResults.length > 0" @click="clearSearch()" class="secondary">Clear</button>
+                </div>
+                <div x-show="searchStatus" class="status" :class="{ error: searchError }" x-text="searchStatus"></div>
+            </div>
+        </div>
+
+        <!-- Search Results (full width below search) -->
+        <div x-show="searchResults.length > 0" class="card" style="margin-bottom: 16px;">
+            <div class="meta" style="margin-bottom: 12px;" x-text="`Found ${formatNumber(searchResults.length)} dependency entries`"></div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 25%;">Dependency</th>
+                            <th style="width: 12%;">Version</th>
+                            <th style="width: 30%;">Repository</th>
+                            <th style="width: 15%;">Vulnerabilities</th>
+                            <th style="width: 18%;">Scanned</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="(result, idx) in searchResults" :key="idx">
+                            <tr :class="result.worstLevel ? `row-${result.worstLevel}` : ''">
+                                <td>
+                                    <strong x-text="result.name"></strong>
+                                    <div x-show="result.group" class="hint" style="margin-top: 2px;" x-text="result.group"></div>
+                                </td>
+                                <td x-text="result.version || '-'"></td>
+                                <td>
+                                    <span class="link" @click="viewRepo(result.repo)" x-text="result.repo" style="cursor: pointer;"></span>
+                                    <span x-show="result.ref" class="hint" style="margin-left: 8px;" x-text="`@${result.ref}`"></span>
+                                </td>
+                                <td>
+                                    <span x-show="result.vulnCount > 0" 
+                                          :class="`pill ${result.worstLevel}`"
+                                          x-text="result.vulnCount"></span>
+                                    <span x-show="result.vulnCount === 0">0</span>
+                                </td>
+                                <td x-text="formatDate(result.scanned_at)"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Scanned Repositories (below) -->
+        <div class="card">
+            <h2 style="margin: 0 0 16px 0; font-size: 16px;">Scanned Repositories</h2>
+            
+            <div x-show="auth.authenticated && repos.length > 0" class="repos-list">
+                <template x-for="repo in repos" :key="repo.id">
+                    <div class="repo-item" @click="viewRepo(repo.full_name)">
+                        <div>
+                            <div class="repo-name" x-text="repo.full_name"></div>
+                            <div class="repo-stats">
+                                <span x-text="`${formatNumber(repo.scan_count)} scans`"></span>
+                                <span x-text="`${formatNumber(repo.total_deps)} deps`"></span>
+                                <span x-text="`${formatNumber(repo.total_vulns)} vulns`"></span>
+                                <span x-text="`Last: ${formatDate(repo.last_scan)}`"></span>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+            
+            <div x-show="auth.authenticated && repos.length === 0" class="hint" style="margin-top: 16px;">
+                No repositories scanned yet. Scan a repository above to get started.
+            </div>
+            
+            <div x-show="!auth.authenticated" class="hint" style="margin-top: 16px;">
+                Sign in to view your scanned repositories. You can still scan repositories without signing in.
+            </div>
+        </div>
+    </div>
+
+    <!-- Page 2: Repo Details -->
+    <div x-show="page === 'details'" class="page active" x-transition>
+        <button @click="backToList()" class="secondary back-btn">← Back to List</button>
+        
+        <!-- Box 1: Project Info -->
+        <div class="card">
+            <h2 style="margin: 0 0 16px 0; font-size: 16px;" x-text="currentRepo || 'Repository Details'"></h2>
+            
+            <!-- Scan Selector -->
+            <div x-show="scanHistory.length > 1" style="margin-bottom: 16px;">
+                <label style="font-size: 12px; display: block; margin-bottom: 4px;">Select Scan (Ref/Branch)</label>
+                <select 
+                    :value="currentScanId" 
+                    @change="switchScan(parseInt($event.target.value))"
+                    style="width: 100%; padding: 6px; max-width: 400px;"
+                    :disabled="loading">
+                    <template x-for="scan in scanHistory" :key="scan.id">
+                        <option :value="scan.id" :selected="scan.id === currentScanId" 
+                            x-text="(scan.ref || '(default)') + ' - ' + formatDate(scan.scanned_at) + ' (' + formatNumber(scan.dep_count || scan.dependency_count) + ' deps, ' + formatNumber(scan.vuln_count) + ' vulns)'">
+                        </option>
+                    </template>
+                </select>
+            </div>
+            
+            <div x-show="status" class="status" :class="{ error: statusError }" x-text="status"></div>
+            <div x-show="meta" class="meta" x-text="meta"></div>
+            <div x-show="count" class="count" x-text="count"></div>
+            <div x-show="summary" class="meta" style="margin-top:8px;" x-html="summary"></div>
+            
+            <div class="actions" style="margin-top:12px;">
+                <button @click="viewRepo(currentRepo, '', true)" :disabled="loading || !currentRepo" class="secondary">Refresh from GitHub</button>
+                <button @click="checkVulns()" :disabled="loading || dependencies.length === 0" class="secondary">Check vulnerabilities</button>
+            </div>
+        </div>
+        
+        <!-- Box 2: Tabs and Content -->
+        <div x-show="dependencies.length > 0 || hasVulnerabilities() || scanHistory.length > 0" class="card" style="margin-top: 16px;">
+            <div class="tabs">
+                <button 
+                    @click="activeTab = 'dependencies'" 
+                    :class="activeTab === 'dependencies' ? 'tab-active' : ''"
+                    class="tab-button">
+                    Dependencies
+                    <span x-show="dependencies.length > 0" class="tab-badge" x-text="formatNumber(dependencies.length)"></span>
+                </button>
+                <button 
+                    x-show="hasVulnerabilities()"
+                    @click="activeTab = 'vulnerabilities'" 
+                    :class="activeTab === 'vulnerabilities' ? 'tab-active' : ''"
+                    class="tab-button">
+                    Vulnerabilities
+                    <span x-show="getAllVulnerabilities().length > 0" class="tab-badge" x-text="formatNumber(getAllVulnerabilities().length)"></span>
+                </button>
+                <button 
+                    x-show="scanHistory.length > 0"
+                    @click="activeTab = 'history'" 
+                    :class="activeTab === 'history' ? 'tab-active' : ''"
+                    class="tab-button">
+                    History
+                    <span x-show="scanHistory.length > 0" class="tab-badge" x-text="formatNumber(scanHistory.length)"></span>
+                </button>
+            </div>
+            
+            <!-- Vulnerabilities Report Tab -->
+            <div x-show="activeTab === 'vulnerabilities' && hasVulnerabilities()" style="padding-top: 16px;">
+                <div class="vuln-report">
+                    <h3 style="margin: 0 0 16px 0; font-size: 16px;">Vulnerabilities Report</h3>
+                    
+                    <template x-for="level in ['critical', 'high', 'medium', 'low']" :key="level">
+                        <div x-show="getVulnsByLevel(level).length > 0" class="vuln-section">
+                            <h3>
+                                <span :class="`pill ${level}`" x-text="level.toUpperCase()"></span>
+                                <span style="margin-left: 8px; font-weight: normal;" x-text="`(${formatNumber(getVulnsByLevel(level).length)})`"></span>
+                            </h3>
+                            <ul class="vuln-list">
+                                <template x-for="vuln in getVulnsByLevel(level)" :key="vuln.id">
+                                    <li>
+                                        <div class="vuln-item">
+                                            <div class="vuln-info">
+                                                <div class="vuln-header">
+                                                    <a :href="vuln.url" target="_blank" rel="noopener" style="font-weight: 600; color: #0a58ca;" x-text="vuln.displayId || vuln.id"></a>
+                                                    <span x-show="vuln.score" :class="`pill ${level}`" x-text="vuln.score"></span>
+                                                </div>
+                                                <div class="vuln-deps" x-text="getAffectedDeps(vuln.id)"></div>
+                                                <div class="vuln-summary" x-text="vuln.summary"></div>
+                                            </div>
+                                        </div>
+                                    </li>
+                                </template>
+                            </ul>
+                        </div>
+                    </template>
+                </div>
+            </div>
+            
+            <!-- Dependencies Tab -->
+            <div x-show="activeTab === 'dependencies' && dependencies.length > 0" style="padding-top: 16px;">
+                <!-- Filters and Sorting -->
+                <div style="margin-bottom: 16px;">
+                    <h3 style="margin: 0 0 12px 0; font-size: 14px;">Filters & Sorting</h3>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px;">
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 4px;">Severity</label>
+                            <select x-model="filterSeverity" style="width: 100%; padding: 6px;">
+                                <option value="">All</option>
+                                <option value="critical">Critical</option>
+                                <option value="high">High</option>
+                                <option value="medium">Medium</option>
+                                <option value="low">Low</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 4px;">Ecosystem</label>
+                            <select x-model="filterEcosystem" style="width: 100%; padding: 6px;">
+                                <option value="">All</option>
+                                <option value="npm">npm</option>
+                                <option value="maven">Maven</option>
+                                <option value="pypi">PyPI</option>
+                                <option value="golang">Go</option>
+                                <option value="composer">Composer/Packagist</option>
+                                <option value="nuget">NuGet</option>
+                                <option value="rubygems">RubyGems</option>
+                                <option value="crates">Crates.io (Rust)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 4px;">Name Search</label>
+                            <input type="text" x-model="filterName" placeholder="Filter by name..." style="width: 100%; padding: 6px;" />
+                        </div>
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 4px;">Sort By</label>
+                            <select x-model="sortBy" style="width: 100%; padding: 6px;">
+                                <option value="name">Name</option>
+                                <option value="version">Version</option>
+                                <option value="vulns">Vulnerabilities</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="actions">
+                        <button @click="setSort(sortBy)" class="secondary">
+                            <span x-text="sortOrder === 'asc' ? '↑' : '↓'"></span> 
+                            <span x-text="sortBy === 'name' ? 'Name' : sortBy === 'version' ? 'Version' : 'Vulns'"></span>
+                        </button>
+                        <button x-show="filterSeverity || filterName || filterEcosystem" @click="clearFilters()" class="secondary">Clear Filters</button>
+                    </div>
+                    <div class="meta" style="margin-top: 8px;">
+                        Showing <span x-text="formatNumber(getFilteredAndSortedDeps().length)"></span> of <span x-text="formatNumber(dependencies.length)"></span> dependencies
+                    </div>
+                </div>
+                
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="cursor: pointer;" @click="setSort('name')">
+                                    Name <span x-show="sortBy === 'name'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                </th>
+                                <th style="cursor: pointer;" @click="setSort('version')">
+                                    Version <span x-show="sortBy === 'version'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                </th>
+                                <th>PURL</th>
+                                <th style="cursor: pointer;" @click="setSort('vulns')">
+                                    Vulns <span x-show="sortBy === 'vulns'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="(dep, idx) in getFilteredAndSortedDeps()" :key="idx">
+                                <tr :class="getRowClass(dep)">
+                                    <td x-text="dep.name"></td>
+                                    <td x-text="dep.version"></td>
+                                    <td x-text="dep.purl"></td>
+                                    <td>
+                                        <span x-show="dep.vulnCount > 0" 
+                                              :class="`pill ${getWorstLevel(dep.vulnIndex)}`"
+                                              @click="toggleDetails(dep.idx)"
+                                              style="cursor: pointer;"
+                                              x-text="dep.vulnCount"></span>
+                                        <span x-show="dep.vulnCount === 0">0</span>
+                                    </td>
+                                </tr>
+                                <tr x-show="dep.showDetails" class="details-row">
+                                    <td colspan="4">
+                                        <div><strong x-text="dep.name"></strong> @ <span x-text="dep.version"></span></div>
+                                        <ol x-show="dep.vulns && dep.vulns.length > 0" style="margin:8px 0 0 16px; padding:0;">
+                                            <template x-for="v in dep.vulns" :key="v.id">
+                                                <li style="margin:6px 0;">
+                                                    <a :href="v.url" target="_blank" rel="noopener" x-text="v.displayId || v.id"></a>
+                                                    <span x-show="v.level" :class="`pill ${v.level}`" x-text="`${v.level}${v.score ? ' ' + v.score : ''}`"></span>
+                                                    <div style="color:#555;" x-text="v.summary"></div>
+                                                </li>
+                                            </template>
+                                        </ol>
+                                        <div x-show="!dep.vulns || dep.vulns.length === 0" style="color:#555;">No known vulnerabilities found for this version.</div>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- History Tab -->
+            <div x-show="activeTab === 'history' && scanHistory.length > 0" style="padding-top: 16px;">
+                <h3 style="margin: 0 0 16px 0; font-size: 16px;">Scan History</h3>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Ref/Branch</th>
+                                <th>Scanned</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="scan in scanHistory" :key="scan.id">
+                                <tr :class="scan.id === currentScanId ? 'vuln-high-row-bg' : ''">
+                                    <td>
+                                        <div style="font-weight: 500;" x-text="scan.ref || '(default)'"></div>
+                                        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+                                            <span x-text="formatNumber(scan.dep_count || scan.dependency_count || 0)"></span> deps · 
+                                            <span x-text="formatNumber(scan.vuln_count || 0)"></span> vulns
+                                        </div>
+                                    </td>
+                                    <td x-text="formatDate(scan.scanned_at)"></td>
+                                    <td>
+                                        <div style="display: flex; gap: 4px;">
+                                            <button 
+                                                @click="switchScan(scan.id)" 
+                                                class="secondary"
+                                                style="padding: 4px 8px; font-size: 12px;"
+                                                :disabled="scan.id === currentScanId">
+                                                View
+                                            </button>
+                                            <button 
+                                                @click="deleteScan(scan.id)" 
+                                                class="secondary"
+                                                style="padding: 4px 8px; font-size: 12px; background: var(--vuln-high-bg); color: var(--vuln-high-text); border-color: var(--vuln-high-border);"
+                                                :disabled="loading">
+                                                Delete
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <div x-show="dependencies.length === 0 && !loading" class="card" style="margin-top: 16px;">
+            <div class="hint">No dependencies loaded. Use the list page to scan a repository first.</div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <div class="footer-content">
+            <div class="footer-text">
+                <p>ScanBase helps you manage SBOMs and track security vulnerabilities across dependencies.</p>
+                <p class="citation">"Know what you have, track what changes, act on what matters."</p>
+            </div>
+            <div class="footer-actions" x-show="auth.authenticated">
+                <button @click="deleteAllUserData()" class="delete-data-btn">
+                    Delete all my data
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div x-show="loading" class="overlay show" x-transition>
+        <div class="spinner"></div>
+    </div>
+
+    <script type="module">
+        // Load app.js first to ensure sbomApp is defined
+        await import('/app.js');
+        // Then load and start Alpine
+        const { default: Alpine } = await import('https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/module.esm.js');
+        window.Alpine = Alpine;
+        Alpine.start();
+    </script>
+</body>
+</html>

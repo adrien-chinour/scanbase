@@ -1,5 +1,5 @@
 {
-  "name": "sbom-manager",
+  "name": "scanbase",
   "version": "0.1.0",
   "private": true,
   "description": "Simple one-page app to fetch and display SBOM from GitHub",

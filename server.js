@@ -2,9 +2,23 @@ const http = require('http');
 const path = require('path');
 const dotenv = require('dotenv');
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { dlog } = require('./lib/utils');
 
 dotenv.config();
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+	console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+	// In production, you might want to log to a service like Sentry
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+	console.error('Uncaught Exception:', error);
+	// Give time for logging, then exit
+	setTimeout(() => process.exit(1), 1000);
+});
 
 // Initialize database (this will create the schema)
 require('./lib/db');
@@ -35,6 +49,33 @@ app.use((req, res, next) => {
 	// Content Security Policy
 	res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com https://api.osv.dev;");
 	next();
+});
+
+// Rate limiting
+const apiLimiter = rateLimit({
+	windowMs: 15 * 60 * 1000, // 15 minutes
+	max: 100, // Limit each IP to 100 requests per windowMs
+	message: { error: 'Too many requests, please try again later.' },
+	standardHeaders: true,
+	legacyHeaders: false,
+});
+
+const strictLimiter = rateLimit({
+	windowMs: 15 * 60 * 1000, // 15 minutes
+	max: 20, // Stricter limit for expensive operations
+	message: { error: 'Too many requests, please try again later.' },
+	standardHeaders: true,
+	legacyHeaders: false,
+});
+
+// Apply rate limiting to API routes (general limit)
+// Expensive endpoints are excluded and have their own stricter limits
+app.use('/api', (req, res, next) => {
+	// Skip general limiter for expensive endpoints (they have their own)
+	if (req.path === '/vulns' || req.path === '/repo' || req.path === '/custom-rules-matches') {
+		return next();
+	}
+	apiLimiter(req, res, next);
 });
 
 // API routes should not be cached
@@ -69,9 +110,9 @@ const {
 
 app.get('/api/fetch', (req, res) => handleApiFetch(req, res, req.query));
 app.get('/api/auto', (req, res) => handleApiAuto(req, res, req.query));
-app.get('/api/repo', (req, res) => handleApiRepoSbom(req, res, req.query));
+app.get('/api/repo', strictLimiter, (req, res) => handleApiRepoSbom(req, res, req.query));
 app.get('/api/me', handleApiMe);
-app.post('/api/vulns', handleApiVulns);
+app.post('/api/vulns', strictLimiter, handleApiVulns);
 app.get('/api/history', handleApiHistory);
 app.get('/api/repos', handleApiRepos);
 app.get('/api/load-scan', handleApiLoadScan);
@@ -84,7 +125,7 @@ app.post('/api/custom-rules', handleApiCustomRules);
 app.get('/api/custom-rules/:id', handleApiCustomRuleById);
 app.put('/api/custom-rules/:id', handleApiCustomRuleById);
 app.delete('/api/custom-rules/:id', handleApiCustomRuleById);
-app.get('/api/custom-rules-matches', handleApiCustomRulesMatches);
+app.get('/api/custom-rules-matches', strictLimiter, handleApiCustomRulesMatches);
 app.get('/login', handleLogin);
 app.get('/oauth/callback', handleCallback);
 app.post('/logout', handleLogout);

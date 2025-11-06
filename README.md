@@ -44,8 +44,15 @@ PORT=3000
 GITHUB_TOKEN=your_github_token
 GITHUB_CLIENT_ID=your_oauth_client_id
 GITHUB_CLIENT_SECRET=your_oauth_client_secret
+ENCRYPTION_KEY=your_32_byte_hex_encryption_key
 DEBUG=false
 ```
+
+**Important:** Generate a secure encryption key for production:
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+Set `ENCRYPTION_KEY` to the generated 64-character hex string. This key encrypts GitHub tokens stored in the database. **Keep this key secure and never commit it to version control!**
 
 ## Running
 

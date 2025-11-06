@@ -24,6 +24,21 @@ function sendText(res, status, text, contentType) {
 	res.status(status).set('Content-Type', contentType || 'text/plain; charset=utf-8').send(text);
 }
 
+function sendError(res, status, message, error = null) {
+	const isProduction = process.env.NODE_ENV === 'production';
+	const response = { error: message };
+	
+	// Only include error details in development
+	if (!isProduction && error) {
+		response.details = error.message;
+		if (error.stack) {
+			response.stack = error.stack;
+		}
+	}
+	
+	sendJson(res, status, response);
+}
+
 // Route handlers
 async function handleApiFetch(req, res, query) {
 	const repo = (query.repo || '').trim();
@@ -38,7 +53,7 @@ async function handleApiFetch(req, res, query) {
 		const parsed = parseDependenciesFromSbom(text);
 		sendJson(res, 200, { repo, ref, path: file, format: parsed.format, dependencies: parsed.dependencies });
 	} catch (e) {
-		sendJson(res, 400, { error: e.message });
+		sendError(res, 400, 'Failed to fetch repository file', e);
 	}
 }
 
@@ -120,10 +135,7 @@ async function handleApiRepoSbom(req, res, query) {
 		sendJson(res, 200, { repo, ref, format: parsed.format, dependencies: parsed.dependencies });
 	} catch (e) {
 		dlog('API /api/repo error', e && e.message);
-		const errorMessage = process.env.NODE_ENV === 'production' 
-			? 'Failed to fetch repository SBOM' 
-			: e.message;
-		sendJson(res, 400, { error: errorMessage });
+		sendError(res, 400, 'Failed to fetch repository SBOM', e);
 	}
 }
 
@@ -134,7 +146,7 @@ async function handleLogin(req, res) {
 		return;
 	}
 	const state = crypto.randomBytes(16).toString('hex');
-	setCookie(res, 'oauth_state', state, { maxAge: 600, sameSite: 'Lax' });
+	setCookie(res, 'oauth_state', state, { maxAge: 300, sameSite: 'Lax' }); // 5 minutes
 	const params = new url.URLSearchParams({
 		client_id: clientId,
 		scope: 'repo',
@@ -386,8 +398,9 @@ async function handleApiVulns(req, res) {
 		
 		// Match custom rules to dependencies
 		const customRulesMap = new Map();
-		// Cache compiled regex patterns to avoid recompiling
+		// Cache compiled regex patterns to avoid recompiling (LRU with size limit)
 		const regexCache = new Map();
+		const MAX_REGEX_CACHE_SIZE = 100;
 		
 		for (const rule of customRules) {
 			// Handle both vulnerabilities and deprecations
@@ -404,6 +417,11 @@ async function handleApiVulns(req, res) {
 						if (Date.now() - startTime > 100) {
 							dlog('Regex pattern too slow, skipping:', rule.purl);
 							continue;
+						}
+						// Limit cache size (LRU eviction)
+						if (regexCache.size >= MAX_REGEX_CACHE_SIZE) {
+							const firstKey = regexCache.keys().next().value;
+							regexCache.delete(firstKey);
 						}
 						regexCache.set(rule.purl, compiled);
 					}
@@ -463,7 +481,6 @@ async function handleApiVulns(req, res) {
 		
 		// Merge custom rules with OSV results
 		for (const [idx, customVulns] of customRulesMap) {
-			const idxStr = String(idx);
 			const existing = allOut.find(r => r.index === idx);
 			if (existing) {
 				existing.vulns.push(...customVulns);
@@ -530,10 +547,7 @@ async function handleApiVulns(req, res) {
 		sendJson(res, 200, { results: allOut, scannedCount: scanned, debug: { withPurl, convertedFromPurl, inferredId, missingVersion } });
 	} catch (e) {
 		dlog('Error in handleApiVulns:', e.message, e.stack);
-		const errorMessage = process.env.NODE_ENV === 'production' 
-			? 'Failed to check vulnerabilities' 
-			: e.message;
-		sendJson(res, 400, { error: errorMessage });
+		sendError(res, 500, 'Failed to check vulnerabilities', e);
 	}
 }
 
@@ -1042,8 +1056,41 @@ async function handleApiCustomRules(req, res) {
 		const body = req.body || {};
 		const { package_name, package_version, purl, purl_use_regex, rule_type, title, description, severity, level } = body;
 		
+		// Validate required fields
 		if (!package_name || !rule_type || !title) {
 			sendJson(res, 400, { error: 'Missing required fields: package_name, rule_type, title' });
+			return;
+		}
+		
+		// Validate field lengths
+		if (package_name.length > 200) {
+			sendJson(res, 400, { error: 'package_name too long (max 200 characters)' });
+			return;
+		}
+		if (package_version && package_version.length > 100) {
+			sendJson(res, 400, { error: 'package_version too long (max 100 characters)' });
+			return;
+		}
+		if (purl && purl.length > 500) {
+			sendJson(res, 400, { error: 'purl too long (max 500 characters)' });
+			return;
+		}
+		if (title.length > 200) {
+			sendJson(res, 400, { error: 'title too long (max 200 characters)' });
+			return;
+		}
+		if (description && description.length > 2000) {
+			sendJson(res, 400, { error: 'description too long (max 2000 characters)' });
+			return;
+		}
+		if (severity && severity.length > 200) {
+			sendJson(res, 400, { error: 'severity too long (max 200 characters)' });
+			return;
+		}
+		
+		// Validate package_name format (basic validation - no control characters)
+		if (/[\x00-\x1F\x7F]/.test(package_name)) {
+			sendJson(res, 400, { error: 'package_name contains invalid characters' });
 			return;
 		}
 		
@@ -1100,7 +1147,7 @@ async function handleApiCustomRules(req, res) {
 			sendJson(res, 201, { rule });
 		} catch (e) {
 			dlog('Error creating custom rule:', e.message, e.stack);
-			sendJson(res, 500, { error: 'Failed to create custom rule' });
+			sendError(res, 500, 'Failed to create custom rule', e);
 		}
 		return;
 	}
@@ -1143,8 +1190,41 @@ async function handleApiCustomRuleById(req, res) {
 		const body = req.body || {};
 		const { package_name, package_version, purl, purl_use_regex, rule_type, title, description, severity, level } = body;
 		
+		// Validate required fields
 		if (!package_name || !rule_type || !title) {
 			sendJson(res, 400, { error: 'Missing required fields: package_name, rule_type, title' });
+			return;
+		}
+		
+		// Validate field lengths
+		if (package_name.length > 200) {
+			sendJson(res, 400, { error: 'package_name too long (max 200 characters)' });
+			return;
+		}
+		if (package_version && package_version.length > 100) {
+			sendJson(res, 400, { error: 'package_version too long (max 100 characters)' });
+			return;
+		}
+		if (purl && purl.length > 500) {
+			sendJson(res, 400, { error: 'purl too long (max 500 characters)' });
+			return;
+		}
+		if (title.length > 200) {
+			sendJson(res, 400, { error: 'title too long (max 200 characters)' });
+			return;
+		}
+		if (description && description.length > 2000) {
+			sendJson(res, 400, { error: 'description too long (max 2000 characters)' });
+			return;
+		}
+		if (severity && severity.length > 200) {
+			sendJson(res, 400, { error: 'severity too long (max 200 characters)' });
+			return;
+		}
+		
+		// Validate package_name format
+		if (/[\x00-\x1F\x7F]/.test(package_name)) {
+			sendJson(res, 400, { error: 'package_name contains invalid characters' });
 			return;
 		}
 		
@@ -1204,7 +1284,7 @@ async function handleApiCustomRuleById(req, res) {
 			sendJson(res, 200, { rule });
 		} catch (e) {
 			dlog('Error updating custom rule:', e.message, e.stack);
-			sendJson(res, 500, { error: 'Failed to update custom rule' });
+			sendError(res, 500, 'Failed to update custom rule', e);
 		}
 		return;
 	}
@@ -1222,7 +1302,7 @@ async function handleApiCustomRuleById(req, res) {
 			sendJson(res, 200, { success: true, message: 'Rule deleted successfully' });
 		} catch (e) {
 			dlog('Error deleting custom rule:', e.message, e.stack);
-			sendJson(res, 500, { error: 'Failed to delete custom rule' });
+			sendError(res, 500, 'Failed to delete custom rule', e);
 		}
 		return;
 	}
@@ -1279,8 +1359,9 @@ async function handleApiCustomRulesMatches(req, res) {
 		`);
 		const allDeps = depsStmt.all(userInfo.id, userInfo.id);
 		
-		// Cache compiled regex patterns
+		// Cache compiled regex patterns (LRU with size limit)
 		const regexCache = new Map();
+		const MAX_REGEX_CACHE_SIZE = 100;
 		const matches = [];
 		
 		// Match each dependency against custom rules
@@ -1304,6 +1385,11 @@ async function handleApiCustomRulesMatches(req, res) {
 						try {
 							if (!regexCache.has(rule.purl)) {
 								const compiled = new RegExp(rule.purl);
+								// Limit cache size (LRU eviction)
+								if (regexCache.size >= MAX_REGEX_CACHE_SIZE) {
+									const firstKey = regexCache.keys().next().value;
+									regexCache.delete(firstKey);
+								}
 								regexCache.set(rule.purl, compiled);
 							}
 							const purlRegex = regexCache.get(rule.purl);
@@ -1347,7 +1433,7 @@ async function handleApiCustomRulesMatches(req, res) {
 		sendJson(res, 200, { matches, rules: customRules });
 	} catch (e) {
 		dlog('Error finding custom rule matches:', e.message, e.stack);
-		sendJson(res, 500, { error: 'Failed to find custom rule matches' });
+		sendError(res, 500, 'Failed to find custom rule matches', e);
 	}
 }
 

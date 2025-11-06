@@ -97,6 +97,52 @@
             </div>
         </div>
 
+        <!-- Custom Rules Matches (below search, above repos) -->
+        <div x-show="auth.authenticated && customRuleMatches.length > 0" class="card" style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h2 style="margin: 0; font-size: 16px;">Custom Rules Matches</h2>
+                <button @click="loadCustomRuleMatches()" class="secondary" style="padding: 4px 8px; font-size: 12px;">Refresh</button>
+            </div>
+            <div class="meta" style="margin-bottom: 12px;" x-text="`Found ${formatNumber(customRuleMatches.length)} dependencies matching custom rules`"></div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 200px;">Package</th>
+                            <th style="width: 100px;">Version</th>
+                            <th style="width: 250px;">Repository</th>
+                            <th style="width: auto;">Matched Rule</th>
+                            <th style="width: 100px;">Type</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="(match, idx) in customRuleMatches" :key="idx">
+                            <tr :class="match.rule_type === 'deprecation' ? 'row-deprecation' : (match.rule_level ? `row-${match.rule_level}` : '')">
+                                <td>
+                                    <strong x-text="match.package_name"></strong>
+                                    <div x-show="match.group" class="hint" style="margin-top: 2px; font-size: 11px;" x-text="match.group"></div>
+                                </td>
+                                <td x-text="match.package_version || '-'"></td>
+                                <td>
+                                    <span class="link" @click="viewRepo(match.repo)" x-text="match.repo" style="cursor: pointer;"></span>
+                                    <span x-show="match.ref" class="hint" style="margin-left: 8px; font-size: 11px;" x-text="`@${match.ref}`"></span>
+                                </td>
+                                <td>
+                                    <div style="font-weight: 500;" x-text="match.rule_title"></div>
+                                    <div x-show="match.purl" style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">
+                                        <code style="font-size: 10px;" x-text="match.purl"></code>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span :class="`pill ${match.rule_type === 'vulnerability' ? (match.rule_level || 'medium') : 'deprecation'}`" x-text="match.rule_type"></span>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- Scanned Repositories (below) -->
         <div class="card">
             <h2 style="margin: 0 0 16px 0; font-size: 16px;">Scanned Repositories</h2>
@@ -188,6 +234,14 @@
                     History
                     <span x-show="scanHistory.length > 0" class="tab-badge" x-text="formatNumber(scanHistory.length)"></span>
                 </button>
+                <button 
+                    x-show="auth.authenticated"
+                    @click="activeTab = 'custom-rules'" 
+                    :class="activeTab === 'custom-rules' ? 'tab-active' : ''"
+                    class="tab-button">
+                    Custom Rules
+                    <span x-show="customRules.length > 0" class="tab-badge" x-text="formatNumber(customRules.length)"></span>
+                </button>
             </div>
             
             <!-- Vulnerabilities Report Tab -->
@@ -219,6 +273,28 @@
                             </ul>
                         </div>
                     </template>
+                    <!-- Deprecations section -->
+                    <div x-show="getVulnsByLevel('deprecation').length > 0" class="vuln-section">
+                        <h3>
+                            <span class="pill deprecation">DEPRECATION</span>
+                            <span style="margin-left: 8px; font-weight: normal;" x-text="`(${formatNumber(getVulnsByLevel('deprecation').length)})`"></span>
+                        </h3>
+                        <ul class="vuln-list">
+                            <template x-for="vuln in getVulnsByLevel('deprecation')" :key="vuln.id">
+                                <li>
+                                    <div class="vuln-item">
+                                        <div class="vuln-info">
+                                            <div class="vuln-header">
+                                                <span style="font-weight: 600; color: var(--deprecation-text);" x-text="vuln.displayId || vuln.id"></span>
+                                            </div>
+                                            <div class="vuln-deps" x-text="getAffectedDeps(vuln.id)"></div>
+                                            <div class="vuln-summary" x-text="vuln.summary"></div>
+                                        </div>
+                                    </div>
+                                </li>
+                            </template>
+                        </ul>
+                    </div>
                 </div>
             </div>
             
@@ -374,6 +450,133 @@
                             </template>
                         </tbody>
                     </table>
+                </div>
+            </div>
+            
+            <!-- Custom Rules Tab -->
+            <div x-show="activeTab === 'custom-rules' && auth.authenticated" style="padding-top: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                    <h3 style="margin: 0; font-size: 16px;">Custom Rules</h3>
+                    <button @click="showCustomRuleForm = true; editingRule = null" class="secondary">Add Rule</button>
+                </div>
+                
+                <div class="hint" style="margin-bottom: 16px;">
+                    Add custom vulnerability or deprecation rules for packages. These rules will be applied when checking vulnerabilities.
+                    Useful for private dependencies or internal security policies.
+                </div>
+                
+                <!-- Custom Rule Form -->
+                <div x-show="showCustomRuleForm" class="card" style="margin-bottom: 16px; background: var(--bg-secondary);">
+                    <h4 style="margin: 0 0 12px 0; font-size: 14px;" x-text="editingRule ? 'Edit Rule' : 'Add Custom Rule'"></h4>
+                    <div style="display: grid; gap: 12px;">
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 4px;">Rule Type *</label>
+                            <select x-model="customRuleForm.rule_type" style="width: 100%; padding: 6px;">
+                                <option value="">Select type</option>
+                                <option value="vulnerability">Vulnerability</option>
+                                <option value="deprecation">Deprecation</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 4px;">Package Name *</label>
+                            <input type="text" x-model="customRuleForm.package_name" placeholder="e.g., my-private-package" style="width: 100%; padding: 6px;" />
+                        </div>
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 4px;">Package Version (optional)</label>
+                            <input type="text" x-model="customRuleForm.package_version" placeholder="e.g., 1.0.0 (leave empty for all versions)" style="width: 100%; padding: 6px;" />
+                        </div>
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 4px;">PURL (optional)</label>
+                            <input type="text" x-model="customRuleForm.purl" placeholder="e.g., pkg:npm/my-package@1.0.0 or regex: pkg:composer/symfony/framework-bundle@7\.[^4].*" style="width: 100%; padding: 6px;" />
+                            <div style="margin-top: 4px;">
+                                <label style="font-size: 12px; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                    <input type="checkbox" x-model="customRuleForm.purl_use_regex" style="margin: 0;" />
+                                    <span>Use regex pattern for PURL matching</span>
+                                </label>
+                                <div class="hint" style="margin-top: 4px; font-size: 11px;">
+                                    When enabled, the PURL field will be treated as a regex pattern. Example: <code>pkg:composer/symfony/framework-bundle@7\.[^4].*</code> matches version 7.x except 7.4.x
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 4px;">Title *</label>
+                            <input type="text" x-model="customRuleForm.title" placeholder="Rule title" style="width: 100%; padding: 6px;" />
+                        </div>
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 4px;">Description (optional)</label>
+                            <textarea x-model="customRuleForm.description" placeholder="Detailed description" rows="3" style="width: 100%; padding: 6px; resize: vertical;"></textarea>
+                        </div>
+                        <div x-show="customRuleForm.rule_type === 'vulnerability'">
+                            <label style="font-size: 12px; display: block; margin-bottom: 4px;">Severity Level</label>
+                            <select x-model="customRuleForm.level" style="width: 100%; padding: 6px;">
+                                <option value="">Select level</option>
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
+                                <option value="critical">Critical</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 4px;">Severity (optional)</label>
+                            <input type="text" x-model="customRuleForm.severity" placeholder="e.g., CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" style="width: 100%; padding: 6px;" />
+                        </div>
+                        <div class="actions">
+                            <button @click="saveCustomRule()" :disabled="loading || !customRuleForm.package_name || !customRuleForm.rule_type || !customRuleForm.title">Save</button>
+                            <button @click="cancelCustomRuleForm()" class="secondary">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Custom Rules List -->
+                <div x-show="customRules.length > 0" class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width: 100px;">Type</th>
+                                <th style="width: 200px;">Package</th>
+                                <th style="width: 100px;">Version</th>
+                                <th style="width: auto; min-width: 250px;">Title / Description</th>
+                                <th style="width: 80px;">Severity</th>
+                                <th style="width: 120px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="rule in customRules" :key="rule.id">
+                                <tr>
+                                    <td>
+                                        <span :class="`pill ${rule.rule_type === 'vulnerability' ? (rule.level || 'medium') : 'deprecation'}`" x-text="rule.rule_type"></span>
+                                    </td>
+                                    <td>
+                                        <div style="font-weight: 500;" x-text="rule.package_name"></div>
+                                        <div x-show="rule.purl" style="font-size: 11px; color: var(--text-secondary); margin-top: 2px; word-break: break-all;">
+                                            <span x-show="rule.purl_use_regex" style="font-style: italic;">Regex: </span>
+                                            <code style="font-size: 10px;" x-text="rule.purl"></code>
+                                        </div>
+                                    </td>
+                                    <td x-text="rule.package_version || 'all'"></td>
+                                    <td>
+                                        <div style="font-weight: 500;" x-text="rule.title"></div>
+                                        <div x-show="rule.description" style="font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.4;" x-text="rule.description"></div>
+                                    </td>
+                                    <td>
+                                        <span x-show="rule.level" :class="`pill ${rule.level}`" x-text="rule.level"></span>
+                                        <span x-show="!rule.level && rule.rule_type === 'deprecation'" class="pill deprecation">-</span>
+                                        <span x-show="!rule.level && rule.rule_type !== 'deprecation'">-</span>
+                                    </td>
+                                    <td>
+                                        <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                                            <button @click="editCustomRule(rule)" class="secondary" style="padding: 4px 8px; font-size: 12px;">Edit</button>
+                                            <button @click="confirmDeleteCustomRule(rule.id)" class="secondary" style="padding: 4px 8px; font-size: 12px; background: var(--vuln-high-bg); color: var(--vuln-high-text); border-color: var(--vuln-high-border);">Delete</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div x-show="customRules.length === 0" class="hint" style="margin-top: 16px;">
+                    No custom rules yet. Click "Add Rule" to create one.
                 </div>
             </div>
         </div>

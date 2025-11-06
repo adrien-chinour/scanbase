@@ -38,13 +38,33 @@ function sbomApp() {
 		currentScanId: null,
 		currentRef: null,
 		loadingHistory: false,
+		// Custom rules
+		customRules: [],
+		customRuleMatches: [],
+		showCustomRuleForm: false,
+		editingRule: null,
+		customRuleForm: {
+			rule_type: '',
+			package_name: '',
+			package_version: '',
+			purl: '',
+			purl_use_regex: false,
+			title: '',
+			description: '',
+			severity: '',
+			level: ''
+		},
 
-		init() {
+		async init() {
 			this.checkAuth();
 			// Check if we have a repo in URL hash
 			const hash = window.location.hash.slice(1);
 			if (hash) {
 				this.viewRepo(hash, '', false);
+			}
+			// Load custom rules if authenticated
+			if (this.auth.authenticated) {
+				await this.loadCustomRules();
 			}
 		},
 
@@ -56,12 +76,15 @@ function sbomApp() {
 			this.auth = await api.checkAuth();
 			if (this.auth.authenticated) {
 				this.repos = await api.loadRepos();
+				await this.loadCustomRules();
+				await this.loadCustomRuleMatches();
 			}
 		},
 
 		async loadRepos() {
 			if (!this.auth.authenticated) return;
 			this.repos = await api.loadRepos();
+			await this.loadCustomRuleMatches();
 		},
 
 		async scanRepo() {
@@ -226,6 +249,99 @@ function sbomApp() {
 
 		clearFilters() {
 			filters.clearFilters(this);
+		},
+		
+		// Custom rules management
+		async loadCustomRules() {
+			if (!this.auth.authenticated) return;
+			try {
+				this.customRules = await api.loadCustomRules();
+			} catch (e) {
+				console.error('Error loading custom rules:', e);
+			}
+		},
+		
+		editCustomRule(rule) {
+			this.editingRule = rule;
+			this.customRuleForm = {
+				rule_type: rule.rule_type || '',
+				package_name: rule.package_name || '',
+				package_version: rule.package_version || '',
+				purl: rule.purl || '',
+				purl_use_regex: rule.purl_use_regex || false,
+				title: rule.title || '',
+				description: rule.description || '',
+				severity: rule.severity || '',
+				level: rule.level || ''
+			};
+			this.showCustomRuleForm = true;
+		},
+		
+		cancelCustomRuleForm() {
+			this.showCustomRuleForm = false;
+			this.editingRule = null;
+			this.customRuleForm = {
+				rule_type: '',
+				package_name: '',
+				package_version: '',
+				purl: '',
+				purl_use_regex: false,
+				title: '',
+				description: '',
+				severity: '',
+				level: ''
+			};
+		},
+		
+		async saveCustomRule() {
+			if (!this.customRuleForm.package_name || !this.customRuleForm.rule_type || !this.customRuleForm.title) {
+				return;
+			}
+			this.loading = true;
+			try {
+				if (this.editingRule) {
+					await api.updateCustomRule(this.editingRule.id, this.customRuleForm);
+				} else {
+					await api.createCustomRule(this.customRuleForm);
+				}
+				await this.loadCustomRules();
+				await this.loadCustomRuleMatches();
+				this.cancelCustomRuleForm();
+			} catch (e) {
+				console.error('Error saving custom rule:', e);
+				this.status = e.message || 'Failed to save custom rule';
+				this.statusError = true;
+			} finally {
+				this.loading = false;
+			}
+		},
+		
+		async confirmDeleteCustomRule(ruleId) {
+			if (!confirm('Are you sure you want to delete this custom rule?')) {
+				return;
+			}
+			this.loading = true;
+			try {
+				await api.deleteCustomRule(ruleId);
+				await this.loadCustomRules();
+				await this.loadCustomRuleMatches();
+			} catch (e) {
+				console.error('Error deleting custom rule:', e);
+				this.status = e.message || 'Failed to delete custom rule';
+				this.statusError = true;
+			} finally {
+				this.loading = false;
+			}
+		},
+		
+		async loadCustomRuleMatches() {
+			if (!this.auth.authenticated) return;
+			try {
+				const json = await api.getCustomRulesMatches();
+				this.customRuleMatches = json.matches || [];
+			} catch (e) {
+				console.error('Error loading custom rule matches:', e);
+			}
 		}
 	}
 }

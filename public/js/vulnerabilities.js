@@ -51,15 +51,24 @@ export async function checkVulns(app) {
 export function getWorstLevel(vulnerabilities, idx) {
 	const vs = vulnerabilities[idx] || [];
 	let rank = -1, lvl = '';
-	const order = { low: 0, medium: 1, high: 2, critical: 3 };
+	const order = { low: 0, medium: 1, high: 2, critical: 3, deprecation: -1 };
+	let hasDeprecation = false;
+	
 	for (const v of vs) {
 		const l = (v.level || '').toLowerCase();
-		if (l in order && order[l] > rank) {
+		if (l === 'deprecation') {
+			hasDeprecation = true;
+		} else if (l in order && order[l] > rank) {
 			rank = order[l];
 			lvl = l;
 		}
 	}
-	return lvl;
+	
+	// If we have vulnerabilities, return the worst one
+	// If we only have deprecations, return 'deprecation'
+	if (lvl) return lvl;
+	if (hasDeprecation) return 'deprecation';
+	return '';
 }
 
 export function getRowClass(vulnerabilities, dep) {

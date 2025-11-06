@@ -61,7 +61,10 @@ const {
 	handleApiLoadScanById,
 	handleApiSearchDeps,
 	handleApiDeleteScan,
-	handleApiDeleteAllUserData
+	handleApiDeleteAllUserData,
+	handleApiCustomRules,
+	handleApiCustomRuleById,
+	handleApiCustomRulesMatches
 } = require('./routes');
 
 app.get('/api/fetch', (req, res) => handleApiFetch(req, res, req.query));
@@ -76,6 +79,12 @@ app.get('/api/load-scan-by-id', handleApiLoadScanById);
 app.get('/api/search-deps', handleApiSearchDeps);
 app.delete('/api/scan', handleApiDeleteScan);
 app.delete('/api/user-data', handleApiDeleteAllUserData);
+app.get('/api/custom-rules', handleApiCustomRules);
+app.post('/api/custom-rules', handleApiCustomRules);
+app.get('/api/custom-rules/:id', handleApiCustomRuleById);
+app.put('/api/custom-rules/:id', handleApiCustomRuleById);
+app.delete('/api/custom-rules/:id', handleApiCustomRuleById);
+app.get('/api/custom-rules-matches', handleApiCustomRulesMatches);
 app.get('/login', handleLogin);
 app.get('/oauth/callback', handleCallback);
 app.post('/logout', handleLogout);

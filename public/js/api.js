@@ -126,3 +126,55 @@ export async function deleteAllUserData() {
 	return json;
 }
 
+export async function loadCustomRules() {
+	const resp = await fetch('/api/custom-rules', {
+		cache: 'no-store'
+	});
+	const json = await resp.json();
+	if (!resp.ok) throw new Error(json.error || 'Failed to load custom rules');
+	return json.rules || [];
+}
+
+export async function createCustomRule(rule) {
+	const resp = await fetch('/api/custom-rules', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		cache: 'no-store',
+		body: JSON.stringify(rule)
+	});
+	const json = await resp.json();
+	if (!resp.ok) throw new Error(json.error || 'Failed to create custom rule');
+	return json.rule;
+}
+
+export async function updateCustomRule(ruleId, rule) {
+	const resp = await fetch(`/api/custom-rules/${ruleId}`, {
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json' },
+		cache: 'no-store',
+		body: JSON.stringify(rule)
+	});
+	const json = await resp.json();
+	if (!resp.ok) throw new Error(json.error || 'Failed to update custom rule');
+	return json.rule;
+}
+
+export async function deleteCustomRule(ruleId) {
+	const resp = await fetch(`/api/custom-rules/${ruleId}`, {
+		method: 'DELETE',
+		cache: 'no-store'
+	});
+	const json = await resp.json();
+	if (!resp.ok) throw new Error(json.error || 'Failed to delete custom rule');
+	return json;
+}
+
+export async function getCustomRulesMatches() {
+	const resp = await fetch('/api/custom-rules-matches', {
+		cache: 'no-store'
+	});
+	const json = await resp.json();
+	if (!resp.ok) throw new Error(json.error || 'Failed to load custom rule matches');
+	return json;
+}
+

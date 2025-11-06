@@ -375,12 +375,107 @@ async function handleApiVulns(req, res) {
 			dlog('OSV enrich done');
 		}
 		
+		// Load custom rules for authenticated users
+		const token = getUserToken(req);
+		const userInfo = token ? getUserIdFromToken(token) : null;
+		let customRules = [];
+		if (userInfo) {
+			const customRulesStmt = db.prepare('SELECT * FROM custom_rules WHERE user_id = ?');
+			customRules = customRulesStmt.all(userInfo.id);
+		}
+		
+		// Match custom rules to dependencies
+		const customRulesMap = new Map();
+		// Cache compiled regex patterns to avoid recompiling
+		const regexCache = new Map();
+		
+		for (const rule of customRules) {
+			// Handle both vulnerabilities and deprecations
+			
+			// Compile regex if needed
+			let purlRegex = null;
+			if (rule.purl && rule.purl_use_regex) {
+				try {
+					if (!regexCache.has(rule.purl)) {
+						const startTime = Date.now();
+						const compiled = new RegExp(rule.purl);
+						// Test with small input to catch catastrophic backtracking early
+						compiled.test('test');
+						if (Date.now() - startTime > 100) {
+							dlog('Regex pattern too slow, skipping:', rule.purl);
+							continue;
+						}
+						regexCache.set(rule.purl, compiled);
+					}
+					purlRegex = regexCache.get(rule.purl);
+				} catch (e) {
+					dlog('Invalid regex pattern in custom rule:', rule.id, rule.purl, e.message);
+					continue;
+				}
+			}
+			
+			for (let i = 0; i < deps.length; i++) {
+				const dep = deps[i] || {};
+				const depName = (dep.name || '').trim();
+				const depVersion = (dep.version || '').trim();
+				const depPurl = (dep.purl || '').trim();
+				
+				// Match by package name (required)
+				if (depName.toLowerCase() !== rule.package_name.toLowerCase()) continue;
+				
+				// Match by version if specified in rule
+				if (rule.package_version && depVersion !== rule.package_version) continue;
+				
+				// Match by PURL if specified in rule
+				if (rule.purl) {
+					if (rule.purl_use_regex && purlRegex) {
+						// Use regex matching
+						try {
+							if (!purlRegex.test(depPurl)) continue;
+						} catch (e) {
+							dlog('Regex test error for rule:', rule.id, e.message);
+							continue;
+						}
+					} else {
+						// Use exact matching
+						if (depPurl && depPurl !== rule.purl) continue;
+					}
+				}
+				
+				// Found a match - add to custom rules map
+				if (!customRulesMap.has(i)) {
+					customRulesMap.set(i, []);
+				}
+				const entry = {
+					id: `custom-${rule.id}`,
+					displayId: rule.title,
+					summary: rule.description || rule.title,
+					severity: rule.severity || '',
+					score: '',
+					level: rule.rule_type === 'deprecation' ? 'deprecation' : (rule.level || 'medium'),
+					url: '',
+					isCustom: true,
+					ruleType: rule.rule_type
+				};
+				customRulesMap.get(i).push(entry);
+			}
+		}
+		
+		// Merge custom rules with OSV results
+		for (const [idx, customVulns] of customRulesMap) {
+			const idxStr = String(idx);
+			const existing = allOut.find(r => r.index === idx);
+			if (existing) {
+				existing.vulns.push(...customVulns);
+			} else {
+				allOut.push({ index: idx, vulns: customVulns });
+			}
+		}
+		
 		// Save vulnerabilities to database if repo info provided
 		const repo = body.repo;
 		const ref = body.ref || null;
 		if (repo) {
-			const token = getUserToken(req);
-			const userInfo = token ? getUserIdFromToken(token) : null;
 			const [owner, name] = repo.split('/');
 			if (owner && name) {
 				const repoData = getOrCreateRepo(owner, name);
@@ -921,6 +1016,341 @@ async function handleApiDeleteAllUserData(req, res) {
 	}
 }
 
+async function handleApiCustomRules(req, res) {
+	const token = getUserToken(req);
+	const userInfo = token ? getUserIdFromToken(token) : null;
+	
+	if (!userInfo) {
+		sendJson(res, 401, { error: 'Not authenticated' });
+		return;
+	}
+	
+	if (req.method === 'GET') {
+		// Get all custom rules for the user
+		const stmt = db.prepare('SELECT * FROM custom_rules WHERE user_id = ? ORDER BY created_at DESC');
+		const rules = stmt.all(userInfo.id);
+		// Convert integer to boolean for JSON response
+		for (const rule of rules) {
+			rule.purl_use_regex = !!rule.purl_use_regex;
+		}
+		sendJson(res, 200, { rules });
+		return;
+	}
+	
+	if (req.method === 'POST') {
+		// Create a new custom rule
+		const body = req.body || {};
+		const { package_name, package_version, purl, purl_use_regex, rule_type, title, description, severity, level } = body;
+		
+		if (!package_name || !rule_type || !title) {
+			sendJson(res, 400, { error: 'Missing required fields: package_name, rule_type, title' });
+			return;
+		}
+		
+		if (rule_type !== 'vulnerability' && rule_type !== 'deprecation') {
+			sendJson(res, 400, { error: 'rule_type must be "vulnerability" or "deprecation"' });
+			return;
+		}
+		
+		if (rule_type === 'vulnerability' && level && !['low', 'medium', 'high', 'critical'].includes(level)) {
+			sendJson(res, 400, { error: 'level must be one of: low, medium, high, critical' });
+			return;
+		}
+		
+		// Validate regex pattern if regex mode is enabled
+		if (purl && purl_use_regex) {
+			try {
+				const startTime = Date.now();
+				const regex = new RegExp(purl);
+				// Test with small input to catch catastrophic backtracking early
+				const testInput = 'test';
+				regex.test(testInput);
+				if (Date.now() - startTime > 100) {
+					sendJson(res, 400, { error: 'Regex pattern too complex or slow' });
+					return;
+				}
+			} catch (e) {
+				sendJson(res, 400, { error: `Invalid regex pattern: ${e.message}` });
+				return;
+			}
+		}
+		
+		try {
+			const insertStmt = db.prepare(`
+				INSERT INTO custom_rules (user_id, package_name, package_version, purl, purl_use_regex, rule_type, title, description, severity, level)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`);
+			const result = insertStmt.run(
+				userInfo.id,
+				package_name,
+				package_version || null,
+				purl || null,
+				purl_use_regex ? 1 : 0,
+				rule_type,
+				title,
+				description || null,
+				severity || null,
+				level || null
+			);
+			
+			const getStmt = db.prepare('SELECT * FROM custom_rules WHERE id = ?');
+			const rule = getStmt.get(result.lastInsertRowid);
+			// Convert integer back to boolean for JSON response
+			rule.purl_use_regex = !!rule.purl_use_regex;
+			sendJson(res, 201, { rule });
+		} catch (e) {
+			dlog('Error creating custom rule:', e.message, e.stack);
+			sendJson(res, 500, { error: 'Failed to create custom rule' });
+		}
+		return;
+	}
+	
+	sendJson(res, 405, { error: 'Method not allowed' });
+}
+
+async function handleApiCustomRuleById(req, res) {
+	const token = getUserToken(req);
+	const userInfo = token ? getUserIdFromToken(token) : null;
+	
+	if (!userInfo) {
+		sendJson(res, 401, { error: 'Not authenticated' });
+		return;
+	}
+	
+	const ruleId = parseInt(req.params.id || '0');
+	if (!ruleId || isNaN(ruleId)) {
+		sendJson(res, 400, { error: 'Invalid rule ID' });
+		return;
+	}
+	
+	// Verify ownership
+	const getStmt = db.prepare('SELECT * FROM custom_rules WHERE id = ? AND user_id = ?');
+	const existingRule = getStmt.get(ruleId, userInfo.id);
+	
+	if (!existingRule) {
+		sendJson(res, 404, { error: 'Rule not found' });
+		return;
+	}
+	
+	if (req.method === 'GET') {
+		// Convert integer to boolean for JSON response
+		existingRule.purl_use_regex = !!existingRule.purl_use_regex;
+		sendJson(res, 200, { rule: existingRule });
+		return;
+	}
+	
+	if (req.method === 'PUT') {
+		const body = req.body || {};
+		const { package_name, package_version, purl, purl_use_regex, rule_type, title, description, severity, level } = body;
+		
+		if (!package_name || !rule_type || !title) {
+			sendJson(res, 400, { error: 'Missing required fields: package_name, rule_type, title' });
+			return;
+		}
+		
+		if (rule_type !== 'vulnerability' && rule_type !== 'deprecation') {
+			sendJson(res, 400, { error: 'rule_type must be "vulnerability" or "deprecation"' });
+			return;
+		}
+		
+		if (rule_type === 'vulnerability' && level && !['low', 'medium', 'high', 'critical'].includes(level)) {
+			sendJson(res, 400, { error: 'level must be one of: low, medium, high, critical' });
+			return;
+		}
+		
+		// Validate regex pattern if regex mode is enabled
+		if (purl && purl_use_regex) {
+			try {
+				const startTime = Date.now();
+				const regex = new RegExp(purl);
+				// Test with small input to catch catastrophic backtracking early
+				const testInput = 'test';
+				regex.test(testInput);
+				if (Date.now() - startTime > 100) {
+					sendJson(res, 400, { error: 'Regex pattern too complex or slow' });
+					return;
+				}
+			} catch (e) {
+				sendJson(res, 400, { error: `Invalid regex pattern: ${e.message}` });
+				return;
+			}
+		}
+		
+		try {
+			const updateStmt = db.prepare(`
+				UPDATE custom_rules 
+				SET package_name = ?, package_version = ?, purl = ?, purl_use_regex = ?, rule_type = ?, title = ?, 
+					description = ?, severity = ?, level = ?, updated_at = CURRENT_TIMESTAMP
+				WHERE id = ? AND user_id = ?
+			`);
+			updateStmt.run(
+				package_name,
+				package_version || null,
+				purl || null,
+				purl_use_regex ? 1 : 0,
+				rule_type,
+				title,
+				description || null,
+				severity || null,
+				level || null,
+				ruleId,
+				userInfo.id
+			);
+			
+			const getStmt = db.prepare('SELECT * FROM custom_rules WHERE id = ?');
+			const rule = getStmt.get(ruleId);
+			// Convert integer back to boolean for JSON response
+			rule.purl_use_regex = !!rule.purl_use_regex;
+			sendJson(res, 200, { rule });
+		} catch (e) {
+			dlog('Error updating custom rule:', e.message, e.stack);
+			sendJson(res, 500, { error: 'Failed to update custom rule' });
+		}
+		return;
+	}
+	
+	if (req.method === 'DELETE') {
+		try {
+			const deleteStmt = db.prepare('DELETE FROM custom_rules WHERE id = ? AND user_id = ?');
+			const result = deleteStmt.run(ruleId, userInfo.id);
+			
+			if (result.changes === 0) {
+				sendJson(res, 404, { error: 'Rule not found' });
+				return;
+			}
+			
+			sendJson(res, 200, { success: true, message: 'Rule deleted successfully' });
+		} catch (e) {
+			dlog('Error deleting custom rule:', e.message, e.stack);
+			sendJson(res, 500, { error: 'Failed to delete custom rule' });
+		}
+		return;
+	}
+	
+	sendJson(res, 405, { error: 'Method not allowed' });
+}
+
+async function handleApiCustomRulesMatches(req, res) {
+	const token = getUserToken(req);
+	const userInfo = token ? getUserIdFromToken(token) : null;
+	
+	if (!userInfo) {
+		sendJson(res, 401, { error: 'Not authenticated' });
+		return;
+	}
+	
+	try {
+		// Get all custom rules for the user
+		const customRulesStmt = db.prepare('SELECT * FROM custom_rules WHERE user_id = ?');
+		const customRules = customRulesStmt.all(userInfo.id);
+		
+		if (customRules.length === 0) {
+			sendJson(res, 200, { matches: [] });
+			return;
+		}
+		
+		// Get all dependencies from user's most recent scans
+		const depsStmt = db.prepare(`
+			SELECT 
+				d.id as dep_id,
+				d.name,
+				d.version,
+				d.purl,
+				d.group_name as "group",
+				r.full_name as repo,
+				r.owner,
+				r.name as repo_name,
+				s.scanned_at,
+				s.id as scan_id,
+				COALESCE(s.ref, '') as ref
+			FROM dependencies d
+			INNER JOIN scans s ON s.id = d.scan_id
+			INNER JOIN repos r ON r.id = s.repo_id
+			INNER JOIN (
+				SELECT repo_id, COALESCE(ref, '') as ref, MAX(scanned_at) as max_scanned_at
+				FROM scans
+				WHERE user_id = ?
+				GROUP BY repo_id, COALESCE(ref, '')
+			) latest ON latest.repo_id = r.id 
+				AND COALESCE(latest.ref, '') = COALESCE(s.ref, '')
+				AND latest.max_scanned_at = s.scanned_at
+			WHERE s.user_id = ?
+			ORDER BY r.full_name, d.name, d.version
+		`);
+		const allDeps = depsStmt.all(userInfo.id, userInfo.id);
+		
+		// Cache compiled regex patterns
+		const regexCache = new Map();
+		const matches = [];
+		
+		// Match each dependency against custom rules
+		for (const dep of allDeps) {
+			const depName = (dep.name || '').trim();
+			const depVersion = (dep.version || '').trim();
+			const depPurl = (dep.purl || '').trim();
+			
+			for (const rule of customRules) {
+				// Match by package name (required)
+				if (depName.toLowerCase() !== rule.package_name.toLowerCase()) continue;
+				
+				// Match by version if specified in rule
+				if (rule.package_version && depVersion !== rule.package_version) continue;
+				
+				// Match by PURL if specified in rule
+				let purlMatches = true;
+				if (rule.purl) {
+					if (rule.purl_use_regex) {
+						// Use regex matching
+						try {
+							if (!regexCache.has(rule.purl)) {
+								const compiled = new RegExp(rule.purl);
+								regexCache.set(rule.purl, compiled);
+							}
+							const purlRegex = regexCache.get(rule.purl);
+							purlMatches = purlRegex.test(depPurl);
+						} catch (e) {
+							dlog('Regex test error for rule:', rule.id, e.message);
+							purlMatches = false;
+						}
+					} else {
+						// Use exact matching
+						purlMatches = depPurl && depPurl === rule.purl;
+					}
+					if (!purlMatches) continue;
+				}
+				
+				// Found a match
+				matches.push({
+					rule_id: rule.id,
+					rule_title: rule.title,
+					rule_type: rule.rule_type,
+					rule_level: rule.level,
+					package_name: dep.name,
+					package_version: dep.version,
+					purl: dep.purl,
+					group: dep.group,
+					repo: dep.repo,
+					repo_name: dep.repo_name,
+					ref: dep.ref,
+					scanned_at: dep.scanned_at,
+					scan_id: dep.scan_id
+				});
+				break; // Only match once per dependency (first matching rule)
+			}
+		}
+		
+		// Convert integer to boolean for JSON response
+		for (const rule of customRules) {
+			rule.purl_use_regex = !!rule.purl_use_regex;
+		}
+		
+		sendJson(res, 200, { matches, rules: customRules });
+	} catch (e) {
+		dlog('Error finding custom rule matches:', e.message, e.stack);
+		sendJson(res, 500, { error: 'Failed to find custom rule matches' });
+	}
+}
+
 module.exports = {
 	handleApiFetch,
 	handleApiAuto,
@@ -936,6 +1366,9 @@ module.exports = {
 	handleApiLoadScanById,
 	handleApiSearchDeps,
 	handleApiDeleteScan,
-	handleApiDeleteAllUserData
+	handleApiDeleteAllUserData,
+	handleApiCustomRules,
+	handleApiCustomRuleById,
+	handleApiCustomRulesMatches
 };
 

@@ -28,6 +28,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const app = express();
 app.disable('x-powered-by');
+app.set('trust proxy', 1);
 
 // Middleware
 app.use((req, _res, next) => {
@@ -93,7 +94,7 @@ app.use((req, res, next) => {
 // Rate limiting
 const apiLimiter = rateLimit({
 	windowMs: 15 * 60 * 1000, // 15 minutes
-	max: 100, // Limit each IP to 100 requests per windowMs
+	max: 1000, // Limit each IP to 1000 requests per windowMs
 	message: { error: 'Too many requests, please try again later.' },
 	standardHeaders: true,
 	legacyHeaders: false,
@@ -101,7 +102,7 @@ const apiLimiter = rateLimit({
 
 const strictLimiter = rateLimit({
 	windowMs: 15 * 60 * 1000, // 15 minutes
-	max: 20, // Stricter limit for expensive operations
+	max: 200, // Stricter limit for expensive operations
 	message: { error: 'Too many requests, please try again later.' },
 	standardHeaders: true,
 	legacyHeaders: false,

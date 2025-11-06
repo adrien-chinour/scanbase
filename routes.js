@@ -237,12 +237,12 @@ async function handleLogout(req, res) {
 }
 
 async function handleApiMe(req, res) {
-	const token = getUserToken(req);
-	if (!token) {
-		sendJson(res, 401, { authenticated: false });
-		return;
-	}
 	try {
+		const token = getUserToken(req);
+		if (!token) {
+			sendJson(res, 401, { authenticated: false });
+			return;
+		}
 		const resp = await githubApiGet('/user', token);
 		sendJson(res, 200, { authenticated: true, user: resp.data });
 	} catch (e) {
@@ -552,6 +552,7 @@ async function handleApiVulns(req, res) {
 }
 
 async function handleApiHistory(req, res) {
+	try {
 		const repo = (req.query.repo || '').trim();
 		if (!repo) {
 			sendJson(res, 400, { error: 'Missing repo' });
@@ -570,81 +571,91 @@ async function handleApiHistory(req, res) {
 			sendJson(res, 400, { error: 'Invalid repo format' });
 			return;
 		}
-	const token = getUserToken(req);
-	const userInfo = token ? getUserIdFromToken(token) : null;
-	const repoData = getOrCreateRepo(owner, name);
-	
-	// Get all scans for this repo (only user's scans)
-	if (!userInfo) {
-		sendJson(res, 401, { error: 'Not authenticated' });
-		return;
+		const token = getUserToken(req);
+		const userInfo = token ? getUserIdFromToken(token) : null;
+		const repoData = getOrCreateRepo(owner, name);
+		
+		// Get all scans for this repo (only user's scans)
+		if (!userInfo) {
+			sendJson(res, 401, { error: 'Not authenticated' });
+			return;
+		}
+		const stmt = db.prepare(`
+			SELECT s.id, s.ref, s.format, s.dependency_count, s.scanned_at,
+				COUNT(DISTINCT d.id) as dep_count,
+				COUNT(DISTINCT v.id) as vuln_count
+			FROM scans s
+			LEFT JOIN dependencies d ON d.scan_id = s.id
+			LEFT JOIN vulnerabilities v ON v.scan_id = s.id
+			WHERE s.repo_id = ? AND s.user_id = ?
+			GROUP BY s.id
+			ORDER BY s.scanned_at DESC
+			LIMIT 50
+		`);
+		const scans = stmt.all(repoData.id, userInfo.id);
+		sendJson(res, 200, { repo, scans });
+	} catch (e) {
+		dlog('Error in handleApiHistory:', e.message);
+		sendError(res, 500, 'Failed to load scan history', e);
 	}
-	const stmt = db.prepare(`
-		SELECT s.id, s.ref, s.format, s.dependency_count, s.scanned_at,
-			COUNT(DISTINCT d.id) as dep_count,
-			COUNT(DISTINCT v.id) as vuln_count
-		FROM scans s
-		LEFT JOIN dependencies d ON d.scan_id = s.id
-		LEFT JOIN vulnerabilities v ON v.scan_id = s.id
-		WHERE s.repo_id = ? AND s.user_id = ?
-		GROUP BY s.id
-		ORDER BY s.scanned_at DESC
-		LIMIT 50
-	`);
-	const scans = stmt.all(repoData.id, userInfo.id);
-	sendJson(res, 200, { repo, scans });
 }
 
 async function handleApiRepos(req, res) {
-	const token = getUserToken(req);
-	if (!token) {
-		sendJson(res, 401, { error: 'Not authenticated' });
-		return;
-	}
-	const userInfo = getUserIdFromToken(token);
-	if (!userInfo) {
-		dlog('Token not found in DB:', token.substring(0, 10) + '...');
-		sendJson(res, 401, { error: 'User not found' });
-		return;
-	}
-	const stmt = db.prepare(`
-		SELECT 
-			r.id, 
-			r.owner, 
-			r.name, 
-			r.full_name, 
-			r.created_at,
-			MAX(s.scanned_at) as last_scan,
-			COUNT(DISTINCT s.id) as scan_count,
-			COALESCE((
-				SELECT dependency_count 
-				FROM scans 
-				WHERE repo_id = r.id AND user_id = ?
-				ORDER BY scanned_at DESC 
-				LIMIT 1
-			), 0) as total_deps,
-			COALESCE((
-				SELECT COUNT(v.id) 
-				FROM vulnerabilities v
-				WHERE v.scan_id = (
-					SELECT id 
+	try {
+		const token = getUserToken(req);
+		if (!token) {
+			sendJson(res, 401, { error: 'Not authenticated' });
+			return;
+		}
+		const userInfo = getUserIdFromToken(token);
+		if (!userInfo) {
+			dlog('Token not found in DB:', token.substring(0, 10) + '...');
+			sendJson(res, 401, { error: 'User not found' });
+			return;
+		}
+		const stmt = db.prepare(`
+			SELECT 
+				r.id, 
+				r.owner, 
+				r.name, 
+				r.full_name, 
+				r.created_at,
+				MAX(s.scanned_at) as last_scan,
+				COUNT(DISTINCT s.id) as scan_count,
+				COALESCE((
+					SELECT dependency_count 
 					FROM scans 
 					WHERE repo_id = r.id AND user_id = ?
 					ORDER BY scanned_at DESC 
 					LIMIT 1
-				)
-			), 0) as total_vulns
-		FROM repos r
-		INNER JOIN scans s ON s.repo_id = r.id
-		WHERE s.user_id = ?
-		GROUP BY r.id
-		ORDER BY last_scan DESC
-	`);
-	const repos = stmt.all(userInfo.id, userInfo.id, userInfo.id);
-	sendJson(res, 200, { repos });
+				), 0) as total_deps,
+				COALESCE((
+					SELECT COUNT(v.id) 
+					FROM vulnerabilities v
+					WHERE v.scan_id = (
+						SELECT id 
+						FROM scans 
+						WHERE repo_id = r.id AND user_id = ?
+						ORDER BY scanned_at DESC 
+						LIMIT 1
+					)
+				), 0) as total_vulns
+			FROM repos r
+			INNER JOIN scans s ON s.repo_id = r.id
+			WHERE s.user_id = ?
+			GROUP BY r.id
+			ORDER BY last_scan DESC
+		`);
+		const repos = stmt.all(userInfo.id, userInfo.id, userInfo.id);
+		sendJson(res, 200, { repos });
+	} catch (e) {
+		dlog('Error in handleApiRepos:', e.message);
+		sendError(res, 500, 'Failed to load repositories', e);
+	}
 }
 
 async function handleApiLoadScan(req, res) {
+	try {
 		const repo = (req.query.repo || '').trim();
 		const ref = (req.query.ref || '').trim();
 		const scanId = req.query.scan_id ? parseInt(req.query.scan_id) : null;
@@ -670,313 +681,327 @@ async function handleApiLoadScan(req, res) {
 			sendJson(res, 400, { error: 'Invalid repo format' });
 			return;
 		}
-	const token = getUserToken(req);
-	const userInfo = token ? getUserIdFromToken(token) : null;
-	const repoData = getOrCreateRepo(owner, name);
-	
-	// Get scan - prefer scan_id, then ref, then most recent (only user's scans)
-	if (!userInfo) {
-		sendJson(res, 401, { error: 'Not authenticated' });
-		return;
-	}
-	let scan = null;
-	if (scanId && !isNaN(scanId)) {
-		const getScanByIdStmt = db.prepare('SELECT id, ref, format, dependency_count, scanned_at FROM scans WHERE id = ? AND repo_id = ? AND user_id = ?');
-		scan = getScanByIdStmt.get(scanId, repoData.id, userInfo.id);
-	} else if (ref) {
-		const getScanByRefStmt = db.prepare('SELECT id, ref, format, dependency_count, scanned_at FROM scans WHERE repo_id = ? AND ref = ? AND user_id = ? ORDER BY scanned_at DESC LIMIT 1');
-		scan = getScanByRefStmt.get(repoData.id, ref, userInfo.id);
-	} else {
-		// Get most recent scan
-		const getScanStmt = db.prepare('SELECT id, ref, format, dependency_count, scanned_at FROM scans WHERE repo_id = ? AND user_id = ? ORDER BY scanned_at DESC LIMIT 1');
-		scan = getScanStmt.get(repoData.id, userInfo.id);
-	}
-	
-	if (!scan) {
-		sendJson(res, 404, { error: 'No scan found for this repository' + (ref ? ` with ref "${ref}"` : '') });
-		return;
-	}
-	
-	// Get dependencies
-	const depsStmt = db.prepare('SELECT name, version, purl, group_name, type FROM dependencies WHERE scan_id = ?');
-	const deps = depsStmt.all(scan.id);
-	
-	// Get vulnerabilities grouped by dependency
-	const vulnsStmt = db.prepare(`
-		SELECT v.dependency_id, v.vuln_id, v.display_id, v.summary, v.severity, v.score, v.level, v.url,
-			d.name as dep_name, d.version as dep_version
-		FROM vulnerabilities v
-		LEFT JOIN dependencies d ON d.id = v.dependency_id
-		WHERE v.scan_id = ?
-	`);
-	const vulns = vulnsStmt.all(scan.id);
-	
-	// Group vulnerabilities by dependency index
-	const vulnsByDep = {};
-	deps.forEach((dep, idx) => {
-		const depVulns = vulns.filter(v => {
-			if (!v.dependency_id) return false;
-			if (v.dep_name === dep.name && v.dep_version === dep.version) return true;
-			return false;
-		});
-		if (depVulns.length > 0) {
-			vulnsByDep[idx] = depVulns.map(v => ({
-				id: v.vuln_id,
-				displayId: v.display_id,
-				summary: v.summary,
-				severity: v.severity,
-				score: v.score,
-				level: v.level,
-				url: v.url
-			}));
+		const token = getUserToken(req);
+		const userInfo = token ? getUserIdFromToken(token) : null;
+		const repoData = getOrCreateRepo(owner, name);
+		
+		// Get scan - prefer scan_id, then ref, then most recent (only user's scans)
+		if (!userInfo) {
+			sendJson(res, 401, { error: 'Not authenticated' });
+			return;
 		}
-	});
-	
-	sendJson(res, 200, {
-		repo,
-		ref: scan.ref,
-		format: scan.format,
-		scanned_at: scan.scanned_at,
-		scan_id: scan.id,
-		dependencies: deps.map(d => ({ ...d, group: d.group_name })),
-		vulnerabilities: vulnsByDep
-	});
+		let scan = null;
+		if (scanId && !isNaN(scanId)) {
+			const getScanByIdStmt = db.prepare('SELECT id, ref, format, dependency_count, scanned_at FROM scans WHERE id = ? AND repo_id = ? AND user_id = ?');
+			scan = getScanByIdStmt.get(scanId, repoData.id, userInfo.id);
+		} else if (ref) {
+			const getScanByRefStmt = db.prepare('SELECT id, ref, format, dependency_count, scanned_at FROM scans WHERE repo_id = ? AND ref = ? AND user_id = ? ORDER BY scanned_at DESC LIMIT 1');
+			scan = getScanByRefStmt.get(repoData.id, ref, userInfo.id);
+		} else {
+			// Get most recent scan
+			const getScanStmt = db.prepare('SELECT id, ref, format, dependency_count, scanned_at FROM scans WHERE repo_id = ? AND user_id = ? ORDER BY scanned_at DESC LIMIT 1');
+			scan = getScanStmt.get(repoData.id, userInfo.id);
+		}
+		
+		if (!scan) {
+			sendJson(res, 404, { error: 'No scan found for this repository' + (ref ? ` with ref "${ref}"` : '') });
+			return;
+		}
+		
+		// Get dependencies
+		const depsStmt = db.prepare('SELECT name, version, purl, group_name, type FROM dependencies WHERE scan_id = ?');
+		const deps = depsStmt.all(scan.id);
+		
+		// Get vulnerabilities grouped by dependency
+		const vulnsStmt = db.prepare(`
+			SELECT v.dependency_id, v.vuln_id, v.display_id, v.summary, v.severity, v.score, v.level, v.url,
+				d.name as dep_name, d.version as dep_version
+			FROM vulnerabilities v
+			LEFT JOIN dependencies d ON d.id = v.dependency_id
+			WHERE v.scan_id = ?
+		`);
+		const vulns = vulnsStmt.all(scan.id);
+		
+		// Group vulnerabilities by dependency index
+		const vulnsByDep = {};
+		deps.forEach((dep, idx) => {
+			const depVulns = vulns.filter(v => {
+				if (!v.dependency_id) return false;
+				if (v.dep_name === dep.name && v.dep_version === dep.version) return true;
+				return false;
+			});
+			if (depVulns.length > 0) {
+				vulnsByDep[idx] = depVulns.map(v => ({
+					id: v.vuln_id,
+					displayId: v.display_id,
+					summary: v.summary,
+					severity: v.severity,
+					score: v.score,
+					level: v.level,
+					url: v.url
+				}));
+			}
+		});
+		
+		sendJson(res, 200, {
+			repo,
+			ref: scan.ref,
+			format: scan.format,
+			scanned_at: scan.scanned_at,
+			scan_id: scan.id,
+			dependencies: deps.map(d => ({ ...d, group: d.group_name })),
+			vulnerabilities: vulnsByDep
+		});
+	} catch (e) {
+		dlog('Error in handleApiLoadScan:', e.message);
+		sendError(res, 500, 'Failed to load scan', e);
+	}
 }
 
 async function handleApiLoadScanById(req, res) {
-	const scanId = parseInt(req.query.scan_id || '0');
-	if (!scanId || isNaN(scanId)) {
-		sendJson(res, 400, { error: 'Invalid scan_id' });
-		return;
-	}
-	const token = getUserToken(req);
-	const userInfo = token ? getUserIdFromToken(token) : null;
-	
-	if (!userInfo) {
-		sendJson(res, 401, { error: 'Not authenticated' });
-		return;
-	}
-	
-	// Get scan and verify access (only user's scans)
-	const getScanStmt = db.prepare('SELECT id, repo_id, ref, format, dependency_count, scanned_at FROM scans WHERE id = ? AND user_id = ?');
-	const scan = getScanStmt.get(scanId, userInfo.id);
-	if (!scan) {
-		sendJson(res, 404, { error: 'Scan not found' });
-		return;
-	}
-	
-	// Get repo info
-	const repoStmt = db.prepare('SELECT owner, name, full_name FROM repos WHERE id = ?');
-	const repoData = repoStmt.get(scan.repo_id);
-	if (!repoData) {
-		sendJson(res, 404, { error: 'Repository not found' });
-		return;
-	}
-	
-	// Get dependencies
-	const depsStmt = db.prepare('SELECT name, version, purl, group_name, type FROM dependencies WHERE scan_id = ?');
-	const deps = depsStmt.all(scan.id);
-	
-	// Get vulnerabilities grouped by dependency
-	const vulnsStmt = db.prepare(`
-		SELECT v.dependency_id, v.vuln_id, v.display_id, v.summary, v.severity, v.score, v.level, v.url,
-			d.name as dep_name, d.version as dep_version
-		FROM vulnerabilities v
-		LEFT JOIN dependencies d ON d.id = v.dependency_id
-		WHERE v.scan_id = ?
-	`);
-	const vulns = vulnsStmt.all(scan.id);
-	
-	// Group vulnerabilities by dependency index
-	const vulnsByDep = {};
-	deps.forEach((dep, idx) => {
-		const depVulns = vulns.filter(v => {
-			if (!v.dependency_id) return false;
-			if (v.dep_name === dep.name && v.dep_version === dep.version) return true;
-			return false;
-		});
-		if (depVulns.length > 0) {
-			vulnsByDep[idx] = depVulns.map(v => ({
-				id: v.vuln_id,
-				displayId: v.display_id,
-				summary: v.summary,
-				severity: v.severity,
-				score: v.score,
-				level: v.level,
-				url: v.url
-			}));
+	try {
+		const scanId = parseInt(req.query.scan_id || '0');
+		if (!scanId || isNaN(scanId)) {
+			sendJson(res, 400, { error: 'Invalid scan_id' });
+			return;
 		}
-	});
-	
-	sendJson(res, 200, {
-		repo: repoData.full_name,
-		ref: scan.ref,
-		format: scan.format,
-		scanned_at: scan.scanned_at,
-		scan_id: scan.id,
-		dependencies: deps.map(d => ({ ...d, group: d.group_name })),
-		vulnerabilities: vulnsByDep
-	});
+		const token = getUserToken(req);
+		const userInfo = token ? getUserIdFromToken(token) : null;
+		
+		if (!userInfo) {
+			sendJson(res, 401, { error: 'Not authenticated' });
+			return;
+		}
+		
+		// Get scan and verify access (only user's scans)
+		const getScanStmt = db.prepare('SELECT id, repo_id, ref, format, dependency_count, scanned_at FROM scans WHERE id = ? AND user_id = ?');
+		const scan = getScanStmt.get(scanId, userInfo.id);
+		if (!scan) {
+			sendJson(res, 404, { error: 'Scan not found' });
+			return;
+		}
+		
+		// Get repo info
+		const repoStmt = db.prepare('SELECT owner, name, full_name FROM repos WHERE id = ?');
+		const repoData = repoStmt.get(scan.repo_id);
+		if (!repoData) {
+			sendJson(res, 404, { error: 'Repository not found' });
+			return;
+		}
+		
+		// Get dependencies
+		const depsStmt = db.prepare('SELECT name, version, purl, group_name, type FROM dependencies WHERE scan_id = ?');
+		const deps = depsStmt.all(scan.id);
+		
+		// Get vulnerabilities grouped by dependency
+		const vulnsStmt = db.prepare(`
+			SELECT v.dependency_id, v.vuln_id, v.display_id, v.summary, v.severity, v.score, v.level, v.url,
+				d.name as dep_name, d.version as dep_version
+			FROM vulnerabilities v
+			LEFT JOIN dependencies d ON d.id = v.dependency_id
+			WHERE v.scan_id = ?
+		`);
+		const vulns = vulnsStmt.all(scan.id);
+		
+		// Group vulnerabilities by dependency index
+		const vulnsByDep = {};
+		deps.forEach((dep, idx) => {
+			const depVulns = vulns.filter(v => {
+				if (!v.dependency_id) return false;
+				if (v.dep_name === dep.name && v.dep_version === dep.version) return true;
+				return false;
+			});
+			if (depVulns.length > 0) {
+				vulnsByDep[idx] = depVulns.map(v => ({
+					id: v.vuln_id,
+					displayId: v.display_id,
+					summary: v.summary,
+					severity: v.severity,
+					score: v.score,
+					level: v.level,
+					url: v.url
+				}));
+			}
+		});
+		
+		sendJson(res, 200, {
+			repo: repoData.full_name,
+			ref: scan.ref,
+			format: scan.format,
+			scanned_at: scan.scanned_at,
+			scan_id: scan.id,
+			dependencies: deps.map(d => ({ ...d, group: d.group_name })),
+			vulnerabilities: vulnsByDep
+		});
+	} catch (e) {
+		dlog('Error in handleApiLoadScanById:', e.message);
+		sendError(res, 500, 'Failed to load scan', e);
+	}
 }
 
 async function handleApiSearchDeps(req, res) {
-	const token = getUserToken(req);
-	const userInfo = token ? getUserIdFromToken(token) : null;
-	if (!userInfo) {
-		sendJson(res, 401, { error: 'Not authenticated' });
-		return;
-	}
-	
-	const pattern = (req.query.pattern || '').trim();
-	if (!pattern) {
-		sendJson(res, 400, { error: 'Missing search pattern' });
-		return;
-	}
-	
-	// Validate pattern length
-	if (pattern.length > 500) {
-		sendJson(res, 400, { error: 'Search pattern too long (max 500 characters)' });
-		return;
-	}
-	
-	// Validate regex pattern with timeout protection
-	let regex;
 	try {
-		const startTime = Date.now();
-		regex = new RegExp(pattern, 'i');
-		// Test with small input to catch catastrophic backtracking early
-		const testInput = 'test';
-		regex.test(testInput);
-		if (Date.now() - startTime > 100) {
-			// Regex took too long even on small input
-			sendJson(res, 400, { error: 'Regex pattern too complex' });
+		const token = getUserToken(req);
+		const userInfo = token ? getUserIdFromToken(token) : null;
+		if (!userInfo) {
+			sendJson(res, 401, { error: 'Not authenticated' });
 			return;
 		}
-	} catch (e) {
-		sendJson(res, 400, { error: 'Invalid regex pattern' });
-		return;
-	}
-	
-	// Search dependencies across all user's repositories
-	// SQLite doesn't support ESCAPE clause easily, so we'll do a broader search and filter with regex
-	const escapedPattern = pattern.replace(/[%_\\]/g, '\\$&');
-	const likePattern = `%${escapedPattern}%`;
-	
-	// Get most recent scan per repo@ref to avoid duplicates
-	const stmt = db.prepare(`
-		SELECT 
-			d.id as dep_id,
-			d.name,
-			d.version,
-			d.purl,
-			d.group_name as "group",
-			r.full_name as repo,
-			r.owner,
-			r.name as repo_name,
-			s.scanned_at,
-			s.id as scan_id,
-			COALESCE(s.ref, '') as ref,
-			COUNT(DISTINCT v.id) as vuln_count,
-			MAX(CASE WHEN v.level = 'critical' THEN 1 ELSE 0 END) as has_critical,
-			MAX(CASE WHEN v.level = 'high' THEN 1 ELSE 0 END) as has_high,
-			MAX(CASE WHEN v.level = 'medium' THEN 1 ELSE 0 END) as has_medium,
-			MAX(CASE WHEN v.level = 'low' THEN 1 ELSE 0 END) as has_low
-		FROM dependencies d
-		INNER JOIN scans s ON s.id = d.scan_id
-		INNER JOIN repos r ON r.id = s.repo_id
-		LEFT JOIN vulnerabilities v ON v.dependency_id = d.id AND v.scan_id = s.id
-		INNER JOIN (
-			SELECT repo_id, COALESCE(ref, '') as ref, MAX(scanned_at) as max_scanned_at
-			FROM scans
-			WHERE user_id = ?
-			GROUP BY repo_id, COALESCE(ref, '')
-		) latest ON latest.repo_id = r.id 
-			AND COALESCE(latest.ref, '') = COALESCE(s.ref, '')
-			AND latest.max_scanned_at = s.scanned_at
-		WHERE s.user_id = ?
-			AND (
-				d.name LIKE ? 
-				OR d.version LIKE ? 
-				OR d.purl LIKE ? 
-				OR d.group_name LIKE ? 
-			)
-		GROUP BY d.id, d.name, d.version, d.purl, d.group_name, r.full_name, r.owner, r.name, s.scanned_at, s.id, s.ref
-		ORDER BY r.full_name, d.name, d.version
-		LIMIT 1000
-	`);
-	
-	const results = stmt.all(userInfo.id, userInfo.id, likePattern, likePattern, likePattern, likePattern);
-	
-	// Filter with actual regex for accurate matching
-	const matches = results.filter(dep => {
-		return regex.test(dep.name) ||
-		       regex.test(dep.version || '') ||
-		       regex.test(dep.purl || '') ||
-		       regex.test(dep.group || '');
-	});
-	
-	// Deduplicate: one row per dependency@version per repo@ref (already handled by SQL, but ensure uniqueness)
-	const uniqueMap = new Map();
-	for (const dep of matches) {
-		const key = `${dep.repo}@${dep.ref}::${dep.name}@${dep.version || ''}`;
-		if (!uniqueMap.has(key)) {
-			// Determine worst severity level
-			let worstLevel = '';
-			if (dep.has_critical) worstLevel = 'critical';
-			else if (dep.has_high) worstLevel = 'high';
-			else if (dep.has_medium) worstLevel = 'medium';
-			else if (dep.has_low) worstLevel = 'low';
-			
-			uniqueMap.set(key, {
-				name: dep.name,
-				version: dep.version || '',
-				purl: dep.purl,
-				group: dep.group,
-				repo: dep.repo,
-				owner: dep.owner,
-				repo_name: dep.repo_name,
-				scanned_at: dep.scanned_at,
-				ref: dep.ref,
-				vulnCount: dep.vuln_count || 0,
-				worstLevel: worstLevel
-			});
+		
+		const pattern = (req.query.pattern || '').trim();
+		if (!pattern) {
+			sendJson(res, 400, { error: 'Missing search pattern' });
+			return;
 		}
+		
+		// Validate pattern length
+		if (pattern.length > 500) {
+			sendJson(res, 400, { error: 'Search pattern too long (max 500 characters)' });
+			return;
+		}
+		
+		// Validate regex pattern with timeout protection
+		let regex;
+		try {
+			const startTime = Date.now();
+			regex = new RegExp(pattern, 'i');
+			// Test with small input to catch catastrophic backtracking early
+			const testInput = 'test';
+			regex.test(testInput);
+			if (Date.now() - startTime > 100) {
+				// Regex took too long even on small input
+				sendJson(res, 400, { error: 'Regex pattern too complex' });
+				return;
+			}
+		} catch (e) {
+			sendJson(res, 400, { error: 'Invalid regex pattern' });
+			return;
+		}
+		
+		// Search dependencies across all user's repositories
+		// SQLite doesn't support ESCAPE clause easily, so we'll do a broader search and filter with regex
+		const escapedPattern = pattern.replace(/[%_\\]/g, '\\$&');
+		const likePattern = `%${escapedPattern}%`;
+		
+		// Get most recent scan per repo@ref to avoid duplicates
+		const stmt = db.prepare(`
+			SELECT 
+				d.id as dep_id,
+				d.name,
+				d.version,
+				d.purl,
+				d.group_name as "group",
+				r.full_name as repo,
+				r.owner,
+				r.name as repo_name,
+				s.scanned_at,
+				s.id as scan_id,
+				COALESCE(s.ref, '') as ref,
+				COUNT(DISTINCT v.id) as vuln_count,
+				MAX(CASE WHEN v.level = 'critical' THEN 1 ELSE 0 END) as has_critical,
+				MAX(CASE WHEN v.level = 'high' THEN 1 ELSE 0 END) as has_high,
+				MAX(CASE WHEN v.level = 'medium' THEN 1 ELSE 0 END) as has_medium,
+				MAX(CASE WHEN v.level = 'low' THEN 1 ELSE 0 END) as has_low
+			FROM dependencies d
+			INNER JOIN scans s ON s.id = d.scan_id
+			INNER JOIN repos r ON r.id = s.repo_id
+			LEFT JOIN vulnerabilities v ON v.dependency_id = d.id AND v.scan_id = s.id
+			INNER JOIN (
+				SELECT repo_id, COALESCE(ref, '') as ref, MAX(scanned_at) as max_scanned_at
+				FROM scans
+				WHERE user_id = ?
+				GROUP BY repo_id, COALESCE(ref, '')
+			) latest ON latest.repo_id = r.id 
+				AND COALESCE(latest.ref, '') = COALESCE(s.ref, '')
+				AND latest.max_scanned_at = s.scanned_at
+			WHERE s.user_id = ?
+				AND (
+					d.name LIKE ? 
+					OR d.version LIKE ? 
+					OR d.purl LIKE ? 
+					OR d.group_name LIKE ? 
+				)
+			GROUP BY d.id, d.name, d.version, d.purl, d.group_name, r.full_name, r.owner, r.name, s.scanned_at, s.id, s.ref
+			ORDER BY r.full_name, d.name, d.version
+			LIMIT 1000
+		`);
+		
+		const results = stmt.all(userInfo.id, userInfo.id, likePattern, likePattern, likePattern, likePattern);
+		
+		// Filter with actual regex for accurate matching
+		const matches = results.filter(dep => {
+			return regex.test(dep.name) ||
+			       regex.test(dep.version || '') ||
+			       regex.test(dep.purl || '') ||
+			       regex.test(dep.group || '');
+		});
+		
+		// Deduplicate: one row per dependency@version per repo@ref (already handled by SQL, but ensure uniqueness)
+		const uniqueMap = new Map();
+		for (const dep of matches) {
+			const key = `${dep.repo}@${dep.ref}::${dep.name}@${dep.version || ''}`;
+			if (!uniqueMap.has(key)) {
+				// Determine worst severity level
+				let worstLevel = '';
+				if (dep.has_critical) worstLevel = 'critical';
+				else if (dep.has_high) worstLevel = 'high';
+				else if (dep.has_medium) worstLevel = 'medium';
+				else if (dep.has_low) worstLevel = 'low';
+				
+				uniqueMap.set(key, {
+					name: dep.name,
+					version: dep.version || '',
+					purl: dep.purl,
+					group: dep.group,
+					repo: dep.repo,
+					owner: dep.owner,
+					repo_name: dep.repo_name,
+					scanned_at: dep.scanned_at,
+					ref: dep.ref,
+					vulnCount: dep.vuln_count || 0,
+					worstLevel: worstLevel
+				});
+			}
+		}
+		
+		const resultsArray = Array.from(uniqueMap.values());
+		
+		sendJson(res, 200, {
+			pattern,
+			results: resultsArray,
+			total: resultsArray.length
+		});
+	} catch (e) {
+		dlog('Error in handleApiSearchDeps:', e.message);
+		sendError(res, 500, 'Failed to search dependencies', e);
 	}
-	
-	const resultsArray = Array.from(uniqueMap.values());
-	
-	sendJson(res, 200, {
-		pattern,
-		results: resultsArray,
-		total: resultsArray.length
-	});
 }
 
 async function handleApiDeleteScan(req, res) {
-	const scanId = req.query.scan_id ? parseInt(req.query.scan_id) : null;
-	if (!scanId || isNaN(scanId)) {
-		sendJson(res, 400, { error: 'Invalid scan_id' });
-		return;
-	}
-	
-	const token = getUserToken(req);
-	const userInfo = token ? getUserIdFromToken(token) : null;
-	
-	if (!userInfo) {
-		sendJson(res, 401, { error: 'Not authenticated' });
-		return;
-	}
-	
-	// Verify scan exists and user has access (only user's scans)
-	const getScanStmt = db.prepare('SELECT id, repo_id, user_id FROM scans WHERE id = ? AND user_id = ?');
-	const scan = getScanStmt.get(scanId, userInfo.id);
-	
-	if (!scan) {
-		sendJson(res, 404, { error: 'Scan not found' });
-		return;
-	}
-	
 	try {
+		const scanId = req.query.scan_id ? parseInt(req.query.scan_id) : null;
+		if (!scanId || isNaN(scanId)) {
+			sendJson(res, 400, { error: 'Invalid scan_id' });
+			return;
+		}
+		
+		const token = getUserToken(req);
+		const userInfo = token ? getUserIdFromToken(token) : null;
+		
+		if (!userInfo) {
+			sendJson(res, 401, { error: 'Not authenticated' });
+			return;
+		}
+		
+		// Verify scan exists and user has access (only user's scans)
+		const getScanStmt = db.prepare('SELECT id, repo_id, user_id FROM scans WHERE id = ? AND user_id = ?');
+		const scan = getScanStmt.get(scanId, userInfo.id);
+		
+		if (!scan) {
+			sendJson(res, 404, { error: 'Scan not found' });
+			return;
+		}
+		
 		// Delete scan (CASCADE will delete dependencies and vulnerabilities)
 		const deleteStmt = db.prepare('DELETE FROM scans WHERE id = ?');
 		const result = deleteStmt.run(scanId);
@@ -989,20 +1014,20 @@ async function handleApiDeleteScan(req, res) {
 		sendJson(res, 200, { success: true, message: 'Scan deleted successfully' });
 	} catch (e) {
 		dlog('Error deleting scan:', e.message, e.stack);
-		sendJson(res, 500, { error: 'Failed to delete scan' });
+		sendError(res, 500, 'Failed to delete scan', e);
 	}
 }
 
 async function handleApiDeleteAllUserData(req, res) {
-	const token = getUserToken(req);
-	const userInfo = token ? getUserIdFromToken(token) : null;
-	
-	if (!userInfo) {
-		sendJson(res, 401, { error: 'Unauthorized' });
-		return;
-	}
-	
 	try {
+		const token = getUserToken(req);
+		const userInfo = token ? getUserIdFromToken(token) : null;
+		
+		if (!userInfo) {
+			sendJson(res, 401, { error: 'Unauthorized' });
+			return;
+		}
+		
 		// Delete all scans for this user (CASCADE will delete dependencies and vulnerabilities)
 		const deleteScansStmt = db.prepare('DELETE FROM scans WHERE user_id = ?');
 		const scansResult = deleteScansStmt.run(userInfo.id);
@@ -1026,7 +1051,7 @@ async function handleApiDeleteAllUserData(req, res) {
 		});
 	} catch (e) {
 		dlog('Error deleting user data:', e.message, e.stack);
-		sendJson(res, 500, { error: 'Failed to delete user data' });
+		sendError(res, 500, 'Failed to delete user data', e);
 	}
 }
 

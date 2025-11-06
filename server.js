@@ -37,16 +37,8 @@ app.use((req, _res, next) => {
 app.use(express.static(PUBLIC_DIR));
 app.use(express.json({ limit: '1mb' }));
 
-// Security headers
-app.use((req, res, next) => {
-	res.setHeader('X-Content-Type-Options', 'nosniff');
-	res.setHeader('X-Frame-Options', 'DENY');
-	res.setHeader('X-XSS-Protection', '1; mode=block');
-	res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-	if (process.env.NODE_ENV === 'production') {
-		res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-	}
-	// Content Security Policy
+// Build CSP once at startup (cached for performance)
+function buildCSP() {
 	const grafanaFaroCollector = process.env.GRAFANA_FARO_COLLECTOR_URL || '';
 	const umamiHost = process.env.UMAMI_HOST_URL || 'https://cloud.umami.is';
 	const umamiScriptUrl = process.env.UMAMI_SCRIPT_URL || 'https://cloud.umami.is';
@@ -80,7 +72,21 @@ app.use((req, res, next) => {
 		cspConnectSrc += ` ${umamiDomain}`;
 	}
 	
-	res.setHeader('Content-Security-Policy', `default-src 'self'; script-src ${cspScriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ${cspConnectSrc};`);
+	return `default-src 'self'; script-src ${cspScriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ${cspConnectSrc};`;
+}
+
+const CSP_HEADER = buildCSP();
+
+// Security headers
+app.use((req, res, next) => {
+	res.setHeader('X-Content-Type-Options', 'nosniff');
+	res.setHeader('X-Frame-Options', 'DENY');
+	res.setHeader('X-XSS-Protection', '1; mode=block');
+	res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+	if (process.env.NODE_ENV === 'production') {
+		res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+	}
+	res.setHeader('Content-Security-Policy', CSP_HEADER);
 	next();
 });
 

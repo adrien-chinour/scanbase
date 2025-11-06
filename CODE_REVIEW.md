@@ -1,6 +1,7 @@
 # Code Review - ScanBase
 
-**Date:** 06/11/2025
+**Date:** 06/11/2025  
+**Last Updated:** 01/15/2025  
 **Reviewer:** AI Assistant  
 **Scope:** Full codebase review (Code Quality & Security)
 
@@ -11,10 +12,13 @@ The codebase is well-structured and follows good practices overall. The applicat
 **Overall Assessment:** ✅ **Excellent** - Production-ready. All critical security issues have been resolved. The codebase now includes:
 - Encrypted token storage (AES-256-GCM)
 - Rate limiting to prevent DoS attacks
-- Standardized error handling
+- Standardized error handling (all route handlers wrapped in try-catch)
 - Comprehensive input validation
 - Memory leak prevention
 - Global error handlers for unhandled rejections
+- Optimized CSP generation (cached at startup)
+- Secure cookie clearing (HttpOnly and Secure flags)
+- Local vendor files (no CDN dependencies for core libraries)
 
 Remaining recommendations are enhancements for maintainability, scalability, and security hardening rather than blockers.
 
@@ -106,18 +110,25 @@ Remaining recommendations are enhancements for maintainability, scalability, and
    - **Risk:** Low - state is validated, but signed cookies would be better
    - **Recommendation:** Consider using signed cookies for additional security
 
-10. **CSP 'unsafe-inline' Usage** (`server.js:36`)
+10. **CSP 'unsafe-inline' Usage** (`server.js:67`)
     ```javascript
-    script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net
+    script-src 'self' 'unsafe-inline'
     ```
     - **Issue:** `unsafe-inline` weakens CSP protection
-    - **Current:** Required for Alpine.js inline scripts
+    - **Current:** Required for Alpine.js inline scripts, but CDN sources removed (using local vendor files)
+    - **Status:** ✅ **Improved** - Removed CDN dependencies (jsdelivr, unpkg) for better security
     - **Recommendation:** Replace `unsafe-inline` with nonces for better CSP protection
     - **Impact:** Low - Alpine.js requires inline scripts, but can be improved
 
 11. **Cookie SameSite Policy**
     - **Current:** `SameSite: Lax` (good default)
     - **Note:** Consider `SameSite: Strict` for enhanced security if cross-site usage not needed
+
+12. **Cookie Clearing Security** ✅ **FIXED**
+    - **Location:** `lib/auth.js:32-38`
+    - **Issue:** `clearCookie()` was missing HttpOnly and Secure flags
+    - **Status:** ✅ **Fixed** - Now includes HttpOnly and Secure flags (when in production)
+    - **Impact:** Improved security - prevents cookie theft via XSS
 
 ---
 
@@ -167,6 +178,14 @@ Remaining recommendations are enhancements for maintainability, scalability, and
 
 ## 3. Performance
 
+### ✅ Improvements Made
+
+1. **CSP Generation Optimization** ✅ **FIXED**
+   - **Location:** `server.js:40-78`
+   - **Issue:** CSP was calculated on every request
+   - **Status:** ✅ **Fixed** - CSP is now built once at startup and cached
+   - **Impact:** Reduced CPU usage and improved response time for all requests
+
 ### ⚠️ Issues & Recommendations
 
 #### **MEDIUM PRIORITY**
@@ -203,14 +222,30 @@ Remaining recommendations are enhancements for maintainability, scalability, and
 
 #### **LOW PRIORITY**
 
-5. **Frontend Bundle Size**
-   - Alpine.js loaded from CDN (good)
+5. **Frontend Bundle Size** ✅ **IMPROVED**
+   - **Status:** ✅ **Improved** - Alpine.js and Grafana Faro now loaded from local vendor files
+   - **Location:** `public/vendor/` directory
+   - **Impact:** Better security (no CDN dependencies), faster loading, works offline
    - **Recommendation:** Consider bundling for production
-   - **Impact:** Low - current approach is fine
 
 ---
 
 ## 4. Error Handling
+
+### ✅ Improvements Made
+
+1. **Comprehensive Error Handling** ✅ **FIXED**
+   - **Location:** All route handlers in `routes.js`
+   - **Status:** ✅ **Fixed** - All route handlers now wrapped in try-catch blocks:
+     - `handleApiMe`
+     - `handleApiRepos`
+     - `handleApiHistory`
+     - `handleApiLoadScan`
+     - `handleApiLoadScanById`
+     - `handleApiSearchDeps`
+     - `handleApiDeleteScan`
+     - `handleApiDeleteAllUserData`
+   - **Impact:** All errors are now properly caught, logged, and returned with consistent error responses
 
 ### ⚠️ Issues & Recommendations
 
@@ -380,10 +415,13 @@ The codebase demonstrates **strong engineering practices** with good security aw
 All high-priority security and code quality issues have been addressed:
 - Token encryption (AES-256-GCM)
 - Rate limiting
-- Standardized error handling
+- Standardized error handling (all route handlers wrapped in try-catch)
 - Comprehensive input validation
 - Memory leak prevention
 - Global error handlers
+- CSP optimization (cached at startup)
+- Secure cookie clearing (HttpOnly and Secure flags)
+- Local vendor files (no CDN dependencies)
 
 ### Remaining Recommendations
 
@@ -411,5 +449,5 @@ The following items are improvements rather than blockers:
 
 ---
 
-**Review completed:** 06/11/2025
-**Last updated:** 06/11/2025 (after applying fixes)
+**Review completed:** 06/11/2025  
+**Last updated:** 01/15/2025 (after applying additional fixes: error handling, CSP optimization, cookie security, local vendor files)

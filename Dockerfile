@@ -20,28 +20,21 @@ RUN apk add --no-cache \
     sqlite \
     && rm -rf /var/cache/apk/*
 
-# Create app user for security
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
-
 WORKDIR /app
 
 # Copy dependencies from builder
-COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
+COPY --from=builder /app/node_modules ./node_modules
 
 # Copy application files
-COPY --chown=nodejs:nodejs package.json package-lock.json ./
-COPY --chown=nodejs:nodejs server.js ./
-COPY --chown=nodejs:nodejs routes.js ./
-COPY --chown=nodejs:nodejs lib ./lib
-COPY --chown=nodejs:nodejs public ./public
+COPY package.json package-lock.json ./
+COPY server.js ./
+COPY routes.js ./
+COPY lib ./lib
+COPY public ./public
 
 # Create data directory for SQLite database (mounted as volume)
 # Database will be created at /app/data/sbom.db (can be persisted via volume)
-RUN mkdir -p /app/data && chown -R nodejs:nodejs /app/data
-
-# Switch to non-root user
-USER nodejs
+RUN mkdir -p /app/data
 
 # Expose port
 EXPOSE 3000

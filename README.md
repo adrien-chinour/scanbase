@@ -1,9 +1,10 @@
-<div style="text-align:center">
+<div align="center">
     <h1>ScanBase</h1>
     <p>
         <strong>
             ScanBase helps you manage SBOMs (Software Bill of Materials) and track security vulnerabilities across  dependencies.
         </strong>
+        <br>
         <em>
             Know what you have, track what changes, act on what matters
         </em>

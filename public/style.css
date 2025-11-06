@@ -183,7 +183,7 @@ label {
 	margin-bottom: 6px;
 }
 
-input {
+input:not([type="checkbox"]):not([type="radio"]) {
 	width: 100%;
 	max-width: 100%;
 	padding: 10px 12px;
@@ -195,8 +195,16 @@ input {
 	color: var(--text-primary);
 }
 
-input::placeholder {
+input:not([type="checkbox"]):not([type="radio"])::placeholder {
 	color: var(--text-muted);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+	width: auto;
+	height: auto;
+	margin: 0;
+	accent-color: var(--text-link);
 }
 
 .actions {

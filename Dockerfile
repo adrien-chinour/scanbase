@@ -37,7 +37,7 @@ COPY --chown=nodejs:nodejs lib ./lib
 COPY --chown=nodejs:nodejs public ./public
 
 # Create data directory for SQLite database (mounted as volume)
-# Database will be created at /app/sbom.db (can be persisted via volume)
+# Database will be created at /app/data/sbom.db (can be persisted via volume)
 RUN mkdir -p /app/data && chown -R nodejs:nodejs /app/data
 
 # Switch to non-root user

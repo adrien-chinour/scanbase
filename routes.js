@@ -146,7 +146,7 @@ async function handleLogin(req, res) {
 		return;
 	}
 	const state = crypto.randomBytes(16).toString('hex');
-	setCookie(res, 'oauth_state', state, { maxAge: 300, sameSite: 'Lax' }); // 5 minutes
+	setCookie(res, 'oauth_state', state, { maxAge: 300, sameSite: 'Strict' }); // 5 minutes
 	const params = new url.URLSearchParams({
 		client_id: clientId,
 		scope: 'repo',
@@ -206,7 +206,7 @@ async function handleCallback(req, res) {
 						dlog('User created/updated:', user.id, userData.login);
 					}
 					// Set cookie after user is saved
-					setCookie(res, 'gh_token', tok.access_token, { maxAge: 60 * 60 * 24 * 7, sameSite: 'Lax' });
+					setCookie(res, 'gh_token', tok.access_token, { maxAge: 60 * 60 * 24 * 7, sameSite: 'Strict' });
 					return res.redirect(302, '/');
 				} catch (e) {
 					dlog('Failed to fetch user info after OAuth:', e.message);

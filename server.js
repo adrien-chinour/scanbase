@@ -47,7 +47,40 @@ app.use((req, res, next) => {
 		res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
 	}
 	// Content Security Policy
-	res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com https://api.osv.dev;");
+	const grafanaFaroCollector = process.env.GRAFANA_FARO_COLLECTOR_URL || '';
+	const umamiHost = process.env.UMAMI_HOST_URL || 'https://cloud.umami.is';
+	const umamiScriptUrl = process.env.UMAMI_SCRIPT_URL || 'https://cloud.umami.is';
+	
+	// Extract domain from URLs for CSP
+	const getDomain = (url) => {
+		try {
+			return new URL(url).origin;
+		} catch {
+			return '';
+		}
+	};
+	
+	const umamiDomain = getDomain(umamiScriptUrl);
+	const umamiHostDomain = getDomain(umamiHost);
+	const faroCollectorDomain = getDomain(grafanaFaroCollector);
+	
+	let cspScriptSrc = "'self' 'unsafe-inline'";
+	if (umamiDomain) {
+		cspScriptSrc += ` ${umamiDomain}`;
+	}
+	
+	let cspConnectSrc = "'self'";
+	// Add Faro collector domain (origin only, not full URL)
+	if (faroCollectorDomain) {
+		cspConnectSrc += ` ${faroCollectorDomain}`;
+	}
+	if (umamiHostDomain && umamiHostDomain !== umamiDomain) {
+		cspConnectSrc += ` ${umamiHostDomain}`;
+	} else if (umamiDomain) {
+		cspConnectSrc += ` ${umamiDomain}`;
+	}
+	
+	res.setHeader('Content-Security-Policy', `default-src 'self'; script-src ${cspScriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ${cspConnectSrc};`);
 	next();
 });
 
@@ -126,6 +159,29 @@ app.get('/api/custom-rules/:id', handleApiCustomRuleById);
 app.put('/api/custom-rules/:id', handleApiCustomRuleById);
 app.delete('/api/custom-rules/:id', handleApiCustomRuleById);
 app.get('/api/custom-rules-matches', strictLimiter, handleApiCustomRulesMatches);
+app.get('/api/faro-config', (req, res) => {
+	// Return Grafana Faro configuration
+	const config = {
+		enabled: !!process.env.GRAFANA_FARO_COLLECTOR_URL,
+		collectorUrl: process.env.GRAFANA_FARO_COLLECTOR_URL || '',
+		app: {
+			name: process.env.GRAFANA_FARO_APP_NAME || 'ScanBase',
+			version: process.env.GRAFANA_FARO_APP_VERSION || '0.1.0',
+			environment: process.env.NODE_ENV || 'development'
+		}
+	};
+	res.json(config);
+});
+app.get('/api/umami-config', (req, res) => {
+	// Return Umami analytics configuration
+	const config = {
+		enabled: !!process.env.UMAMI_WEBSITE_ID,
+		websiteId: process.env.UMAMI_WEBSITE_ID || '',
+		scriptUrl: process.env.UMAMI_SCRIPT_URL || 'https://cloud.umami.is/script.js',
+		hostUrl: process.env.UMAMI_HOST_URL || ''
+	};
+	res.json(config);
+});
 app.get('/login', handleLogin);
 app.get('/oauth/callback', handleCallback);
 app.post('/logout', handleLogout);

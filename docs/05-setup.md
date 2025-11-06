@@ -54,6 +54,16 @@ GITHUB_CLIENT_SECRET=your_oauth_app_client_secret
 # Encryption Key (REQUIRED for production)
 ENCRYPTION_KEY=your_64_character_hex_string
 
+# Grafana Faro (Frontend Observability) - Optional
+GRAFANA_FARO_COLLECTOR_URL=https://faro-collector.your-region.grafana.net/collect/{app-key}
+GRAFANA_FARO_APP_NAME=ScanBase
+GRAFANA_FARO_APP_VERSION=0.1.0
+
+# Umami Analytics - Optional
+UMAMI_WEBSITE_ID=your_umami_website_id
+UMAMI_SCRIPT_URL=https://cloud.umami.is/script.js
+UMAMI_HOST_URL=
+
 # Debug Mode
 DEBUG=false
 ```
@@ -95,7 +105,78 @@ For scanning public repositories without OAuth:
 3. Select scope: `public_repo` (or `repo` for private repos)
 4. Copy the token
 
-### 6. Run the Application
+### 6. Grafana Faro Setup (Optional)
+
+Grafana Faro provides frontend observability (RUM - Real User Monitoring). To enable it:
+
+1. **Create a Frontend Observability Application in Grafana Cloud:**
+   - Sign in to your Grafana Cloud account
+   - Navigate to **Observability > Frontend**
+   - Click **Create new**
+   - Provide:
+     - **Application Name:** ScanBase (or your preferred name)
+     - **CORS Allowed Origins:** Your domain (e.g., `https://yourdomain.com`)
+   - Click **Create**
+   - Copy the collector URL (format: `https://faro-collector.your-region.grafana.net/collect/{app-key}`)
+
+2. **Configure in `.env`:**
+   ```env
+   GRAFANA_FARO_COLLECTOR_URL=https://faro-collector.your-region.grafana.net/collect/{app-key}
+   GRAFANA_FARO_APP_NAME=ScanBase
+   GRAFANA_FARO_APP_VERSION=0.1.0
+   ```
+
+3. **Configure CORS:**
+   - In Grafana Cloud, go to your Frontend Observability application settings
+   - Add your domain to **CORS Allowed Origins**
+   - For local development: `http://localhost:3000`
+   - For production: `https://yourdomain.com`
+   - **Important:** Without proper CORS configuration, you'll see "transport-fetch Failed sending payload" errors
+
+4. **Verify:**
+   - Open browser console
+   - Look for "Grafana Faro initialized with collector: ..." message
+   - Check browser Network tab for requests to the collector URL
+   - Check Grafana Cloud dashboard for incoming data
+   - If you see transport errors, verify CORS settings match your application's origin
+
+**Troubleshooting:**
+- **"transport-fetch Failed sending payload"**: Usually a CORS issue. Ensure your application's origin is in the CORS Allowed Origins list in Grafana Cloud.
+- **Collector URL format**: Should be `https://faro-collector.your-region.grafana.net/collect/{app-key}`
+- **Network errors**: Check browser console Network tab to see the exact error from the collector
+
+**Note:** Grafana Faro is optional. If not configured, the application will work normally without observability.
+
+### 7. Umami Analytics Setup (Optional)
+
+Umami provides privacy-focused web analytics. To enable it:
+
+1. **Create an Umami Account:**
+   - Sign up at [Umami Cloud](https://cloud.umami.is) or set up self-hosted Umami
+   - Create a new website
+   - Copy the **Website ID** (UUID format)
+
+2. **Configure in `.env`:**
+   ```env
+   UMAMI_WEBSITE_ID=your_umami_website_id
+   UMAMI_SCRIPT_URL=https://cloud.umami.is/script.js
+   ```
+   
+   For self-hosted Umami:
+   ```env
+   UMAMI_WEBSITE_ID=your_umami_website_id
+   UMAMI_SCRIPT_URL=https://your-umami-instance.com/script.js
+   UMAMI_HOST_URL=https://your-umami-instance.com
+   ```
+
+3. **Verify:**
+   - Open browser developer tools → Network tab
+   - Look for requests to Umami script
+   - Check Umami dashboard for page views
+
+**Note:** Umami is optional. If not configured, the application will work normally without analytics. All `data-umami-event` attributes in the HTML will be ignored if Umami is not loaded.
+
+### 8. Run the Application
 
 ```bash
 npm run server
@@ -109,7 +190,7 @@ node server.js
 
 The server will start on `http://localhost:3000` (or your configured PORT).
 
-### 7. Verify Installation
+### 9. Verify Installation
 
 1. Open `http://localhost:3000` in your browser
 2. You should see the ScanBase interface
@@ -138,6 +219,12 @@ No manual database setup is required.
 | `GITHUB_CLIENT_ID` | No* | - | OAuth app client ID |
 | `GITHUB_CLIENT_SECRET` | No* | - | OAuth app client secret |
 | `ENCRYPTION_KEY` | Yes** | - | 64-char hex encryption key |
+| `GRAFANA_FARO_COLLECTOR_URL` | No | - | Grafana Faro collector URL |
+| `GRAFANA_FARO_APP_NAME` | No | `ScanBase` | Application name for Faro |
+| `GRAFANA_FARO_APP_VERSION` | No | `0.1.0` | Application version for Faro |
+| `UMAMI_WEBSITE_ID` | No | - | Umami analytics website ID |
+| `UMAMI_SCRIPT_URL` | No | `https://cloud.umami.is/script.js` | Umami script URL |
+| `UMAMI_HOST_URL` | No | - | Umami host URL (for self-hosted) |
 | `DEBUG` | No | `false` | Enable debug logging |
 | `SECURE_COOKIES` | No | - | Force secure cookies (set to `true`) |
 

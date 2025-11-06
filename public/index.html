@@ -614,14 +614,13 @@
     </div>
 
     <script type="module">
-        // Load app.js first to ensure sbomApp is defined
         await import('/app.js');
-        // Then load and start Alpine
-        const { default: Alpine } = await import('https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/module.esm.js');
+        const { default: Alpine } = await import('/vendor/alpine.esm.js');
         window.Alpine = Alpine;
         Alpine.start();
     </script>
     
-    <script defer src="https://cloud.umami.is/script.js" data-website-id="REDACTED-UMAMI-WEBSITE-ID"></script>
+    <script src="/js/faro.js"></script>
+    <script src="/js/umami.js"></script>
 </body>
 </html>

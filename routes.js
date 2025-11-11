@@ -240,13 +240,13 @@ async function handleApiMe(req, res) {
 	try {
 		const token = getUserToken(req);
 		if (!token) {
-			sendJson(res, 401, { authenticated: false });
+			sendJson(res, 200, { authenticated: false, user: null });
 			return;
 		}
 		const resp = await githubApiGet('/user', token);
 		sendJson(res, 200, { authenticated: true, user: resp.data });
 	} catch (e) {
-		sendJson(res, 401, { authenticated: false, error: 'Invalid token' });
+		sendJson(res, 200, { authenticated: false, error: 'Invalid token', user: null });
 	}
 }
 

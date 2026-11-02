@@ -15,8 +15,8 @@
             <span x-show="auth.authenticated && auth.user" style="font-size: 14px; color: #555;">
                 <span x-text="auth.user?.login || ''"></span>
             </span>
-            <button x-show="!auth.authenticated" @click="login()" class="secondary" data-umami-event="sign-in">Sign in with GitHub</button>
-            <button x-show="auth.authenticated" @click="logout()" class="secondary" data-umami-event="sign-out">Sign out</button>
+            <button x-show="!auth.authenticated" @click="login()" class="secondary">Sign in with GitHub</button>
+            <button x-show="auth.authenticated" @click="logout()" class="secondary">Sign out</button>
         </div>
     </div>
     
@@ -33,10 +33,11 @@
                     <div class="hint">Examples: <code>owner/repo</code> · <code>owner/repo@main</code> · <code>https://github.com/owner/repo</code></div>
                 </div>
                 <div class="actions" style="margin-top:12px;">
-                    <button @click="scanRepo()" :disabled="loading || !auth.authenticated" data-umami-event="scan-repository">Scan Repository</button>
+                    <button @click="scanRepo()" :disabled="loading || !auth.authenticated">Scan Repository</button>
+                    <button @click="openImport()" :disabled="loading || !auth.authenticated" class="secondary">Import from organization…</button>
                 </div>
                 <div x-show="!auth.authenticated" class="hint" style="margin-top: 8px;">
-                    Please sign in to scan repositories.
+                    Sign in with GitHub to scan repositories and browse the shared results.
                 </div>
                 <div x-show="status" class="status" :class="{ error: statusError }" x-text="status"></div>
             </div>
@@ -50,11 +51,99 @@
                     <div class="hint">Search across all scanned repositories. Uses regex pattern matching.</div>
                 </div>
                 <div class="actions" style="margin-top:12px;">
-                    <button @click="searchDeps()" :disabled="loading || !searchPattern || !auth.authenticated" data-umami-event="search-dependencies">Search</button>
-                    <button x-show="searchResults.length > 0" @click="clearSearch()" class="secondary" data-umami-event="clear-search">Clear</button>
+                    <button @click="searchDeps()" :disabled="loading || !searchPattern || !auth.authenticated">Search</button>
+                    <button x-show="searchResults.length > 0" @click="clearSearch()" class="secondary">Clear</button>
                 </div>
                 <div x-show="searchStatus" class="status" :class="{ error: searchError }" x-text="searchStatus"></div>
             </div>
+        </div>
+
+        <!-- Organization import panel -->
+        <div x-show="importOpen" class="card" style="margin-bottom: 16px; background: var(--bg-secondary);" x-transition>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap;">
+                <h2 style="margin: 0; font-size: 16px;">Import repositories from GitHub</h2>
+                <button class="secondary" @click="closeImport()">Close</button>
+            </div>
+            <div class="hint" style="margin-bottom: 12px;">Select repositories to scan in the background. Each one is fetched from the GitHub Dependency Graph and checked against OSV.dev.</div>
+            <div x-show="importStatus" class="status" :class="{ error: importError }" x-text="importStatus"></div>
+            <div style="display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-bottom: 12px;">
+                <div>
+                    <label style="font-size: 12px; display: block; margin-bottom: 4px;">Organization</label>
+                    <select x-model="importOwner" @change="loadImportRepos()" :disabled="importLoading || importOrgs.length === 0" style="width: 100%; padding: 6px;">
+                        <template x-for="org in importOrgs" :key="org.login">
+                            <option :value="org.login" x-text="org.login + (org.type === 'user' ? ' (personal)' : '')"></option>
+                        </template>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size: 12px; display: block; margin-bottom: 4px;">Filter</label>
+                    <input type="text" x-model="importFilter" placeholder="Name or language…" />
+                </div>
+                <div style="display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap;">
+                    <button class="secondary" @click="selectVisibleRepos(true)" :disabled="importLoading || importRepos.length === 0">Select active</button>
+                    <button class="secondary" @click="selectVisibleRepos(false)" :disabled="importLoading || importRepos.length === 0">Select all visible</button>
+                    <button class="secondary" @click="clearSelectedRepos()" :disabled="importSelected.length === 0">Clear</button>
+                </div>
+            </div>
+            <div x-show="importLoading" class="hint">Loading from GitHub…</div>
+            <div x-show="!importLoading && importOrgs.length === 0" class="hint">No organizations found for your account.</div>
+            <div x-show="!importLoading && importRepos.length > 0" class="table-wrap" style="max-height: 400px; overflow-y: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 32px;"></th>
+                            <th>Repository</th>
+                            <th style="width: 15%;">Language</th>
+                            <th style="width: 12%;">Visibility</th>
+                            <th style="width: 15%;">Last push</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="repo in filteredImportRepos()" :key="repo.id">
+                            <tr :class="{ 'row-deprecation': repo.archived }" @click="toggleImportRepo(repo.full_name)" style="cursor: pointer;">
+                                <td><input type="checkbox" :checked="isRepoSelected(repo.full_name)" @click.stop="toggleImportRepo(repo.full_name)" /></td>
+                                <td>
+                                    <strong x-text="repo.full_name"></strong>
+                                    <span x-show="repo.archived" class="hint" style="margin-left: 8px;">archived</span>
+                                </td>
+                                <td x-text="repo.language || '-'"></td>
+                                <td x-text="repo.private ? 'Private' : 'Public'"></td>
+                                <td x-text="repo.pushed_at ? formatDate(repo.pushed_at) : '-'"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+            <div class="actions" style="margin-top: 12px; align-items: center;">
+                <button @click="startImport()" :disabled="importLoading || importSelected.length === 0" x-text="`Scan ${importSelected.length} selected repositories`"></button>
+            </div>
+        </div>
+
+        <!-- Background jobs -->
+        <div x-show="auth.authenticated && jobs.length > 0" class="card" style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h2 style="margin: 0; font-size: 16px;">Background scans</h2>
+                <button @click="refreshJobs()" class="secondary" style="padding: 4px 8px; font-size: 12px;">Refresh</button>
+            </div>
+            <template x-for="job in jobs.slice(0, 3)" :key="job.id">
+                <div style="margin-bottom: 10px;">
+                    <div class="meta">
+                        <strong x-text="`#${job.id} ${job.type}`"></strong>
+                        <span x-text="` · ${job.status} · ${job.done + job.failed}/${job.total}`"></span>
+                        <span x-show="job.failed > 0" style="color: var(--text-error);" x-text="` · ${job.failed} failed`"></span>
+                        <span class="hint" x-text="` · ${formatDate(job.created_at)}`"></span>
+                    </div>
+                    <div class="progress"><div class="progress-bar" :style="`width: ${jobProgress(job)}%`"></div></div>
+                    <details x-show="job.failed > 0" style="margin-top: 4px;">
+                        <summary class="hint" style="cursor: pointer;">Failed repositories</summary>
+                        <ul style="margin: 4px 0 0 16px; padding: 0; font-size: 12px;">
+                            <template x-for="item in job.items.filter(i => i.status === 'failed')" :key="item.repo">
+                                <li><code x-text="item.repo"></code> <span class="hint" x-text="item.error"></span></li>
+                            </template>
+                        </ul>
+                    </details>
+                </div>
+            </template>
         </div>
 
         <!-- Search Results (full width below search) -->
@@ -80,7 +169,7 @@
                                 </td>
                                 <td x-text="result.version || '-'"></td>
                                 <td>
-                                    <span class="link" @click="viewRepo(result.repo)" x-text="result.repo" style="cursor: pointer;" data-umami-event="view-repo-from-search"></span>
+                                    <span class="link" @click="viewRepo(result.repo)" x-text="result.repo" style="cursor: pointer;"></span>
                                     <span x-show="result.ref" class="hint" style="margin-left: 8px;" x-text="`@${result.ref}`"></span>
                                 </td>
                                 <td>
@@ -101,7 +190,7 @@
         <div x-show="auth.authenticated && customRuleMatches.length > 0" class="card" style="margin-bottom: 16px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                 <h2 style="margin: 0; font-size: 16px;">Custom Rules Matches</h2>
-                <button @click="loadCustomRuleMatches()" class="secondary" style="padding: 4px 8px; font-size: 12px;" data-umami-event="refresh-custom-rule-matches">Refresh</button>
+                <button @click="loadCustomRuleMatches()" class="secondary" style="padding: 4px 8px; font-size: 12px;">Refresh</button>
             </div>
             <div class="meta" style="margin-bottom: 12px;" x-text="`Found ${formatNumber(customRuleMatches.length)} dependencies matching custom rules`"></div>
             <div class="table-wrap">
@@ -124,7 +213,7 @@
                                 </td>
                                 <td x-text="match.package_version || '-'"></td>
                                 <td>
-                                    <span class="link" @click="viewRepo(match.repo)" x-text="match.repo" style="cursor: pointer;" data-umami-event="view-repo-from-custom-rules"></span>
+                                    <span class="link" @click="viewRepo(match.repo)" x-text="match.repo" style="cursor: pointer;"></span>
                                     <span x-show="match.ref" class="hint" style="margin-left: 8px; font-size: 11px;" x-text="`@${match.ref}`"></span>
                                 </td>
                                 <td>
@@ -149,13 +238,15 @@
             
             <div x-show="auth.authenticated && repos.length > 0" class="repos-list">
                 <template x-for="repo in repos" :key="repo.id">
-                    <div class="repo-item" @click="viewRepo(repo.full_name)" data-umami-event="view-repo">
+                    <div class="repo-item" @click="viewRepo(repo.full_name)">
                         <div>
                             <div class="repo-name" x-text="repo.full_name"></div>
                             <div class="repo-stats">
                                 <span x-text="`${formatNumber(repo.scan_count)} scans`"></span>
                                 <span x-text="`${formatNumber(repo.total_deps)} deps`"></span>
                                 <span x-text="`${formatNumber(repo.total_vulns)} vulns`"></span>
+                                <span x-show="repo.critical_vulns > 0" class="pill critical" x-text="`${repo.critical_vulns} critical`"></span>
+                                <span x-show="repo.high_vulns > 0" class="pill high" x-text="`${repo.high_vulns} high`"></span>
                                 <span x-text="`Last: ${formatDate(repo.last_scan)}`"></span>
                             </div>
                         </div>
@@ -164,18 +255,18 @@
             </div>
             
             <div x-show="auth.authenticated && repos.length === 0" class="hint" style="margin-top: 16px;">
-                No repositories scanned yet. Scan a repository above to get started.
+                No repositories scanned yet. Scan one above or import an organization to get started.
             </div>
             
             <div x-show="!auth.authenticated" class="hint" style="margin-top: 16px;">
-                Sign in to view your scanned repositories. You can still scan repositories without signing in.
+                Sign in to view scanned repositories.
             </div>
         </div>
     </div>
 
     <!-- Page 2: Repo Details -->
     <div x-show="page === 'details'" class="page active" x-transition>
-        <button @click="backToList()" class="secondary back-btn" data-umami-event="back-to-list">← Back to List</button>
+        <button @click="backToList()" class="secondary back-btn">← Back to List</button>
         
         <!-- Box 1: Project Info -->
         <div class="card">
@@ -189,7 +280,7 @@
                     @change="switchScan(parseInt($event.target.value))"
                     style="width: 100%; padding: 6px; max-width: 400px;"
                     :disabled="loading"
-                    data-umami-event="select-scan">
+                   >
                     <template x-for="scan in scanHistory" :key="scan.id">
                         <option :value="scan.id" :selected="scan.id === currentScanId" 
                             x-text="(scan.ref || '(default)') + ' - ' + formatDate(scan.scanned_at) + ' (' + formatNumber(scan.dep_count || scan.dependency_count) + ' deps, ' + formatNumber(scan.vuln_count) + ' vulns)'">
@@ -204,8 +295,8 @@
             <div x-show="summary" class="meta" style="margin-top:8px;" x-html="summary"></div>
             
             <div class="actions" style="margin-top:12px;">
-                <button @click="viewRepo(currentRepo, '', true)" :disabled="loading || !currentRepo" class="secondary" data-umami-event="refresh-from-github">Refresh from GitHub</button>
-                <button @click="checkVulns()" :disabled="loading || dependencies.length === 0" class="secondary" data-umami-event="check-vulnerabilities">Check vulnerabilities</button>
+                <button @click="viewRepo(currentRepo, currentRef || '', true)" :disabled="loading || !currentRepo || !auth.authenticated" class="secondary">Rescan from GitHub</button>
+                <button @click="checkVulns()" :disabled="loading || !currentScanId" class="secondary">Re-check vulnerabilities</button>
             </div>
         </div>
         
@@ -216,7 +307,7 @@
                     @click="activeTab = 'dependencies'" 
                     :class="activeTab === 'dependencies' ? 'tab-active' : ''"
                     class="tab-button"
-                    data-umami-event="tab-dependencies">
+                   >
                     Dependencies
                     <span x-show="dependencies.length > 0" class="tab-badge" x-text="formatNumber(dependencies.length)"></span>
                 </button>
@@ -225,7 +316,7 @@
                     @click="activeTab = 'vulnerabilities'" 
                     :class="activeTab === 'vulnerabilities' ? 'tab-active' : ''"
                     class="tab-button"
-                    data-umami-event="tab-vulnerabilities">
+                   >
                     Vulnerabilities
                     <span x-show="getAllVulnerabilities().length > 0" class="tab-badge" x-text="formatNumber(getAllVulnerabilities().length)"></span>
                 </button>
@@ -234,7 +325,7 @@
                     @click="activeTab = 'history'" 
                     :class="activeTab === 'history' ? 'tab-active' : ''"
                     class="tab-button"
-                    data-umami-event="tab-history">
+                   >
                     History
                     <span x-show="scanHistory.length > 0" class="tab-badge" x-text="formatNumber(scanHistory.length)"></span>
                 </button>
@@ -243,7 +334,7 @@
                     @click="activeTab = 'custom-rules'" 
                     :class="activeTab === 'custom-rules' ? 'tab-active' : ''"
                     class="tab-button"
-                    data-umami-event="tab-custom-rules">
+                   >
                     Custom Rules
                     <span x-show="customRules.length > 0" class="tab-badge" x-text="formatNumber(customRules.length)"></span>
                 </button>
@@ -266,7 +357,7 @@
                                         <div class="vuln-item">
                                             <div class="vuln-info">
                                                 <div class="vuln-header">
-                                                    <a :href="vuln.url" target="_blank" rel="noopener" style="font-weight: 600; color: #0a58ca;" x-text="vuln.displayId || vuln.id" data-umami-event="view-vulnerability-link"></a>
+                                                    <a :href="vuln.url" target="_blank" rel="noopener" style="font-weight: 600; color: #0a58ca;" x-text="vuln.displayId || vuln.id"></a>
                                                     <span x-show="vuln.score" :class="`pill ${level}`" x-text="vuln.score"></span>
                                                 </div>
                                                 <div class="vuln-deps" x-text="getAffectedDeps(vuln.id)"></div>
@@ -347,11 +438,11 @@
                         </div>
                     </div>
                     <div class="actions">
-                        <button @click="setSort(sortBy)" class="secondary" data-umami-event="sort-dependencies">
+                        <button @click="setSort(sortBy)" class="secondary">
                             <span x-text="sortOrder === 'asc' ? '↑' : '↓'"></span> 
                             <span x-text="sortBy === 'name' ? 'Name' : sortBy === 'version' ? 'Version' : 'Vulns'"></span>
                         </button>
-                        <button x-show="filterSeverity || filterName || filterEcosystem" @click="clearFilters()" class="secondary" data-umami-event="clear-filters">Clear Filters</button>
+                        <button x-show="filterSeverity || filterName || filterEcosystem" @click="clearFilters()" class="secondary">Clear Filters</button>
                     </div>
                     <div class="meta" style="margin-top: 8px;">
                         Showing <span x-text="formatNumber(getFilteredAndSortedDeps().length)"></span> of <span x-text="formatNumber(dependencies.length)"></span> dependencies
@@ -362,14 +453,14 @@
                     <table>
                         <thead>
                             <tr>
-                                <th style="cursor: pointer;" @click="setSort('name')" data-umami-event="sort-by-name">
+                                <th style="cursor: pointer;" @click="setSort('name')">
                                     Name <span x-show="sortBy === 'name'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
                                 </th>
-                                <th style="cursor: pointer;" @click="setSort('version')" data-umami-event="sort-by-version">
+                                <th style="cursor: pointer;" @click="setSort('version')">
                                     Version <span x-show="sortBy === 'version'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
                                 </th>
                                 <th>PURL</th>
-                                <th style="cursor: pointer;" @click="setSort('vulns')" data-umami-event="sort-by-vulns">
+                                <th style="cursor: pointer;" @click="setSort('vulns')">
                                     Vulns <span x-show="sortBy === 'vulns'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
                                 </th>
                             </tr>
@@ -386,7 +477,7 @@
                                               @click="toggleDetails(dep.idx)"
                                               style="cursor: pointer;"
                                               x-text="dep.vulnCount"
-                                              data-umami-event="toggle-dependency-details"></span>
+                                             ></span>
                                         <span x-show="dep.vulnCount === 0">0</span>
                                     </td>
                                 </tr>
@@ -396,7 +487,7 @@
                                         <ol x-show="dep.vulns && dep.vulns.length > 0" style="margin:8px 0 0 16px; padding:0;">
                                             <template x-for="v in dep.vulns" :key="v.id">
                                                 <li style="margin:6px 0;">
-                                                    <a :href="v.url" target="_blank" rel="noopener" x-text="v.displayId || v.id" data-umami-event="view-vulnerability-detail-link"></a>
+                                                    <a :href="v.url" target="_blank" rel="noopener" x-text="v.displayId || v.id"></a>
                                                     <span x-show="v.level" :class="`pill ${v.level}`" x-text="`${v.level}${v.score ? ' ' + v.score : ''}`"></span>
                                                     <div style="color:#555;" x-text="v.summary"></div>
                                                 </li>
@@ -441,7 +532,7 @@
                                                 class="secondary"
                                                 style="padding: 4px 8px; font-size: 12px;"
                                                 :disabled="scan.id === currentScanId"
-                                                data-umami-event="switch-scan">
+                                               >
                                                 View
                                             </button>
                                             <button 
@@ -449,7 +540,7 @@
                                                 class="secondary"
                                                 style="padding: 4px 8px; font-size: 12px; background: var(--vuln-high-bg); color: var(--vuln-high-text); border-color: var(--vuln-high-border);"
                                                 :disabled="loading"
-                                                data-umami-event="delete-scan">
+                                               >
                                                 Delete
                                             </button>
                                         </div>
@@ -465,7 +556,7 @@
             <div x-show="activeTab === 'custom-rules' && auth.authenticated" style="padding-top: 16px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                     <h3 style="margin: 0; font-size: 16px;">Custom Rules</h3>
-                    <button @click="showCustomRuleForm = true; editingRule = null" class="secondary" data-umami-event="add-custom-rule">Add Rule</button>
+                    <button @click="showCustomRuleForm = true; editingRule = null" class="secondary">Add Rule</button>
                 </div>
                 
                 <div class="hint" style="margin-bottom: 16px;">
@@ -529,8 +620,8 @@
                             <input type="text" x-model="customRuleForm.severity" placeholder="e.g., CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" style="width: 100%; padding: 6px;" />
                         </div>
                         <div class="actions">
-                            <button @click="saveCustomRule()" :disabled="loading || !customRuleForm.package_name || !customRuleForm.rule_type || !customRuleForm.title" data-umami-event="save-custom-rule">Save</button>
-                            <button @click="cancelCustomRuleForm()" class="secondary" data-umami-event="cancel-custom-rule">Cancel</button>
+                            <button @click="saveCustomRule()" :disabled="loading || !customRuleForm.package_name || !customRuleForm.rule_type || !customRuleForm.title">Save</button>
+                            <button @click="cancelCustomRuleForm()" class="secondary">Cancel</button>
                         </div>
                     </div>
                 </div>
@@ -573,8 +664,8 @@
                                     </td>
                                     <td>
                                         <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-                                            <button @click="editCustomRule(rule)" class="secondary" style="padding: 4px 8px; font-size: 12px;" data-umami-event="edit-custom-rule">Edit</button>
-                                            <button @click="confirmDeleteCustomRule(rule.id)" class="secondary" style="padding: 4px 8px; font-size: 12px; background: var(--vuln-high-bg); color: var(--vuln-high-text); border-color: var(--vuln-high-border);" data-umami-event="delete-custom-rule">Delete</button>
+                                            <button @click="editCustomRule(rule)" class="secondary" style="padding: 4px 8px; font-size: 12px;">Edit</button>
+                                            <button @click="confirmDeleteCustomRule(rule.id)" class="secondary" style="padding: 4px 8px; font-size: 12px; background: var(--vuln-high-bg); color: var(--vuln-high-text); border-color: var(--vuln-high-border);">Delete</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -600,11 +691,6 @@
                 <p>ScanBase helps you manage SBOMs and track security vulnerabilities across dependencies.</p>
                 <p class="citation">"Know what you have, track what changes, act on what matters."</p>
             </div>
-            <div class="footer-actions" x-show="auth.authenticated">
-                <button @click="deleteAllUserData()" class="delete-data-btn" data-umami-event="delete-all-user-data">
-                    Delete all my data
-                </button>
-            </div>
         </div>
     </div>
 
@@ -620,7 +706,5 @@
         Alpine.start();
     </script>
     
-    <script src="/js/faro.js"></script>
-    <script src="/js/umami.js"></script>
 </body>
 </html>

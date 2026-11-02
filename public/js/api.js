@@ -1,180 +1,49 @@
-// API call functions
+// Thin client for the ScanBase API. Every call throws an Error with .status on failure.
+
+async function request(path, options = {}) {
+	const resp = await fetch(path, { cache: 'no-store', ...options });
+	let json = null;
+	try { json = await resp.json(); } catch (_) { /* no body */ }
+	if (!resp.ok) {
+		const err = new Error((json && json.error) || `Request failed (${resp.status})`);
+		err.status = resp.status;
+		throw err;
+	}
+	return json;
+}
+
+const post = (path, body) => request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+const put = (path, body) => request(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+const del = (path) => request(path, { method: 'DELETE' });
 
 export async function checkAuth() {
-	try {
-		const resp = await fetch('/api/me', { cache: 'no-store' });
-		const json = await resp.json();
-		if (resp.ok) {
-			return json;
-		}
-		return { authenticated: false };
-	} catch (_) {
-		return { authenticated: false };
-	}
-}
-
-export async function loadRepos() {
-	try {
-		const resp = await fetch('/api/repos', { cache: 'no-store' });
-		if (!resp.ok) {
-			// 401 is expected when not authenticated, return empty array
-			if (resp.status === 401) {
-				return [];
-			}
-			const json = await resp.json();
-			throw new Error(json.error || 'Failed to load repositories');
-		}
-		const json = await resp.json();
-		return json.repos || [];
-	} catch (_) {
-		return [];
-	}
-}
-
-export async function fetchRepo(repo, ref = '') {
-	const params = new URLSearchParams({ repo, ref, _t: Date.now() });
-	const resp = await fetch(`/api/repo?${params.toString()}`, {
-		cache: 'no-store'
-	});
-	const json = await resp.json();
-	if (!resp.ok) {
-		const error = new Error(json.error || 'Request failed');
-		error.status = resp.status;
-		throw error;
-	}
-	return json;
-}
-
-export async function loadScanFromDB(repo, scanId = null, ref = null) {
-	const params = new URLSearchParams({ repo, _t: Date.now() });
-	if (scanId) params.set('scan_id', scanId);
-	else if (ref) params.set('ref', ref);
-	
-	const loadResp = await fetch(`/api/load-scan?${params.toString()}`, {
-		cache: 'no-store'
-	});
-	if (loadResp.ok) {
-		return await loadResp.json();
-	}
-	const err = await loadResp.json();
-	throw new Error(err.error || 'Failed to load scan');
-}
-
-export async function loadScanHistory(repo) {
-	const params = new URLSearchParams({ repo, _t: Date.now() });
-	const resp = await fetch(`/api/history?${params.toString()}`, {
-		cache: 'no-store'
-	});
-	if (resp.ok) {
-		const data = await resp.json();
-		return data.scans || [];
-	}
-	return [];
-}
-
-export async function checkVulnerabilities(dependencies, repo, ref) {
-	const resp = await fetch('/api/vulns', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		cache: 'no-store',
-		body: JSON.stringify({ 
-			dependencies, 
-			enrich: true, 
-			repo,
-			ref
-		})
-	});
-	const json = await resp.json();
-	if (!resp.ok) throw new Error(json.error || 'Vulnerability query failed');
-	return json;
-}
-
-export async function deleteScan(scanId) {
-	const params = new URLSearchParams({ scan_id: scanId, _t: Date.now() });
-	const resp = await fetch(`/api/scan?${params.toString()}`, {
-		method: 'DELETE',
-		cache: 'no-store'
-	});
-	const json = await resp.json();
-	if (!resp.ok) throw new Error(json.error || 'Failed to delete scan');
-	return json;
-}
-
-export async function searchDependencies(pattern) {
-	const params = new URLSearchParams({ pattern, _t: Date.now() });
-	const resp = await fetch(`/api/search-deps?${params.toString()}`, {
-		cache: 'no-store'
-	});
-	const json = await resp.json();
-	if (!resp.ok) throw new Error(json.error || 'Search failed');
-	return json;
+	try { return await request('/api/me'); } catch (_) { return { authenticated: false }; }
 }
 
 export async function logout() {
-	try {
-		await fetch('/logout', { method: 'POST' });
-	} catch (_) {}
+	try { await fetch('/logout', { method: 'POST' }); } catch (_) { /* ignore */ }
 }
 
-export async function deleteAllUserData() {
-	const resp = await fetch('/api/user-data', {
-		method: 'DELETE',
-		cache: 'no-store'
-	});
-	const json = await resp.json();
-	if (!resp.ok) throw new Error(json.error || 'Failed to delete user data');
-	return json;
+export async function loadRepos() {
+	try { return (await request('/api/repos')).repos || []; } catch (_) { return []; }
 }
 
-export async function loadCustomRules() {
-	const resp = await fetch('/api/custom-rules', {
-		cache: 'no-store'
-	});
-	const json = await resp.json();
-	if (!resp.ok) throw new Error(json.error || 'Failed to load custom rules');
-	return json.rules || [];
-}
+export const scanRepo = (repo, ref) => post('/api/scans', { repo, ref: ref || null });
+export const loadLatestScan = (repo, ref) => request(`/api/scans/latest?${new URLSearchParams({ repo, ref: ref || '' })}`);
+export const loadScanById = (id) => request(`/api/scans/${id}`);
+export const recheckVulns = (scanId) => post(`/api/scans/${scanId}/vulns`);
+export const deleteScan = (id) => del(`/api/scans/${id}`);
+export const loadScanHistory = async (repo) => (await request(`/api/repos/${repo}/scans`)).scans || [];
+export const searchDependencies = (pattern) => request(`/api/search?${new URLSearchParams({ pattern })}`);
 
-export async function createCustomRule(rule) {
-	const resp = await fetch('/api/custom-rules', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		cache: 'no-store',
-		body: JSON.stringify(rule)
-	});
-	const json = await resp.json();
-	if (!resp.ok) throw new Error(json.error || 'Failed to create custom rule');
-	return json.rule;
-}
+export const loadCustomRules = async () => (await request('/api/rules')).rules || [];
+export const createCustomRule = async (rule) => (await post('/api/rules', rule)).rule;
+export const updateCustomRule = async (id, rule) => (await put(`/api/rules/${id}`, rule)).rule;
+export const deleteCustomRule = (id) => del(`/api/rules/${id}`);
+export const getCustomRulesMatches = () => request('/api/rules/matches');
 
-export async function updateCustomRule(ruleId, rule) {
-	const resp = await fetch(`/api/custom-rules/${ruleId}`, {
-		method: 'PUT',
-		headers: { 'Content-Type': 'application/json' },
-		cache: 'no-store',
-		body: JSON.stringify(rule)
-	});
-	const json = await resp.json();
-	if (!resp.ok) throw new Error(json.error || 'Failed to update custom rule');
-	return json.rule;
-}
-
-export async function deleteCustomRule(ruleId) {
-	const resp = await fetch(`/api/custom-rules/${ruleId}`, {
-		method: 'DELETE',
-		cache: 'no-store'
-	});
-	const json = await resp.json();
-	if (!resp.ok) throw new Error(json.error || 'Failed to delete custom rule');
-	return json;
-}
-
-export async function getCustomRulesMatches() {
-	const resp = await fetch('/api/custom-rules-matches', {
-		cache: 'no-store'
-	});
-	const json = await resp.json();
-	if (!resp.ok) throw new Error(json.error || 'Failed to load custom rule matches');
-	return json;
-}
-
+export const listGithubOrgs = async () => (await request('/api/github/orgs')).organizations || [];
+export const listGithubRepos = async (owner) => (await request(`/api/github/repos?${new URLSearchParams({ owner })}`)).repos || [];
+export const createImportJob = async (repos) => (await post('/api/jobs', { repos })).job;
+export const listJobs = async () => (await request('/api/jobs')).jobs || [];
+export const getJob = async (id) => (await request(`/api/jobs/${id}`)).job;

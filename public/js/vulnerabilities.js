@@ -1,45 +1,21 @@
 // Vulnerability-related functions
 
 import * as api from './api.js';
-import { formatNumber } from './utils.js';
-import { calculateSummary } from './scans.js';
+import { applyScan } from './scans.js';
 
 export async function checkVulns(app) {
-	if (app.dependencies.length === 0) {
-		app.status = 'No dependencies to check.';
+	if (!app.currentScanId) {
+		app.status = 'No scan loaded.';
 		app.statusError = true;
 		return;
 	}
 	app.loading = true;
-	app.status = 'Querying vulnerabilities…';
+	app.status = 'Checking vulnerabilities against OSV.dev…';
 	app.statusError = false;
 	try {
-		const json = await api.checkVulnerabilities(app.dependencies, app.lastRepo, app.currentRef);
-		const counts = {};
-		app.vulnerabilities = {};
-		for (const r of (json.results || [])) {
-			const list = r.vulns || [];
-			const idxStr = String(r.index);
-			counts[r.index] = list.length;
-			app.vulnerabilities[idxStr] = list;
-		}
-		app.dependencies.forEach((d, idx) => {
-			const idxStr = String(idx);
-			d.vulnCount = counts[idx] || 0;
-			d.vulnIndex = idx;
-			d.vulns = app.vulnerabilities[idxStr] || [];
-		});
-		const scanned = json.scannedCount || Object.keys(counts).length;
-		app.status = `Vulnerability check complete · scanned ${formatNumber(scanned)}/${formatNumber(app.dependencies.length)}`;
-		
-		// Calculate summary
-		calculateSummary(app);
-		
-		if (app.auth && app.auth.authenticated) {
-			await api.loadRepos().then(repos => {
-				app.repos = repos;
-			});
-		}
+		const scan = await api.recheckVulns(app.currentScanId);
+		applyScan(app, scan, 'Vulnerability check complete');
+		app.repos = await api.loadRepos();
 	} catch (e) {
 		app.status = e.message;
 		app.statusError = true;

@@ -1,0 +1,15 @@
+services:
+  scanbase:
+    build: .
+    # image: ghcr.io/adrien-chinour/scanbase:latest
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      TRUST_PROXY: "true"
+    volumes:
+      - scanbase-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  scanbase-data:

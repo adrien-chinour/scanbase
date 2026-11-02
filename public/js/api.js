@@ -47,3 +47,5 @@ export const listGithubRepos = async (owner) => (await request(`/api/github/repo
 export const createImportJob = async (repos) => (await post('/api/jobs', { repos })).job;
 export const listJobs = async () => (await request('/api/jobs')).jobs || [];
 export const getJob = async (id) => (await request(`/api/jobs/${id}`)).job;
+export const rescanAll = async () => (await post('/api/jobs/rescan')).job;
+export const loadOrgVulnerabilities = () => request('/api/vulnerabilities');

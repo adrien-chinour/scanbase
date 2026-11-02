@@ -94,12 +94,12 @@ export async function refreshJobs(app) {
 		app.jobsPoll = setInterval(async () => {
 			const before = app.jobs.map(j => j.done + j.failed).join(',');
 			await refreshJobs(app);
-			if (app.jobs.map(j => j.done + j.failed).join(',') !== before) app.repos = await api.loadRepos();
+			if (app.jobs.map(j => j.done + j.failed).join(',') !== before) await app.loadRepos();
 		}, POLL_MS);
 	} else if (!running && app.jobsPoll) {
 		clearInterval(app.jobsPoll);
 		app.jobsPoll = null;
-		app.repos = await api.loadRepos();
+		await app.loadRepos();
 	}
 }
 

@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "DEBUG=true node --watch server.js",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "lint": "eslint ."
   },
   "engines": {
     "node": ">=24.0.0 <25.0.0"
@@ -16,5 +17,10 @@
     "express": "^4.19.2",
     "express-rate-limit": "^8.2.1"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0"
+  }
 }

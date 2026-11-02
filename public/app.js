@@ -45,6 +45,12 @@ function sbomApp() {
 		editingRule: null,
 		customRuleForm: emptyRuleForm(),
 		...imp.importState(),
+		depsLimit: 200,
+		orgVulns: [],
+		orgVulnCounts: {},
+		orgVulnLevel: '',
+		orgVulnsOpen: false,
+		expandedVuln: null,
 
 		formatNumber: utils.formatNumber,
 		formatDate: utils.formatDate,
@@ -64,14 +70,37 @@ function sbomApp() {
 			this.auth = await api.checkAuth();
 			if (this.auth.authenticated) {
 				this.repos = await api.loadRepos();
-				await Promise.all([this.loadCustomRules(), this.loadCustomRuleMatches(), imp.refreshJobs(this)]);
+				await Promise.all([this.loadCustomRules(), this.loadCustomRuleMatches(), imp.refreshJobs(this), this.loadOrgVulns()]);
 			}
 		},
 
 		async loadRepos() {
 			if (!this.auth.authenticated) return;
 			this.repos = await api.loadRepos();
-			await this.loadCustomRuleMatches();
+			await Promise.all([this.loadCustomRuleMatches(), this.loadOrgVulns()]);
+		},
+
+		async loadOrgVulns() {
+			if (!this.auth.authenticated) return;
+			try {
+				const json = await api.loadOrgVulnerabilities();
+				this.orgVulns = json.vulnerabilities || [];
+				this.orgVulnCounts = json.counts || {};
+			} catch (e) { console.error('Error loading vulnerabilities:', e); }
+		},
+
+		filteredOrgVulns() {
+			return this.orgVulns.filter(v => !this.orgVulnLevel || v.level === this.orgVulnLevel).slice(0, 200);
+		},
+
+		async rescanAll() {
+			if (!confirm('Rescan every known repository now? This runs in the background.')) return;
+			try {
+				const job = await api.rescanAll();
+				this.importStatus = `Job #${job.id} queued: ${job.total} repositories will be rescanned.`;
+				this.importError = false;
+				await this.refreshJobs();
+			} catch (e) { this.status = e.message; this.statusError = true; }
 		},
 
 		async scanRepo() {
@@ -88,7 +117,7 @@ function sbomApp() {
 		loadScan(scanId = null, ref = null) { return scans.loadScan(this, scanId, ref); },
 		switchScan(scanId) { return scans.switchScan(this, scanId); },
 		deleteScan(scanId) { return scans.deleteScan(this, scanId); },
-		viewRepo(repo, ref = '', forceRefresh = false) { return scans.viewRepo(this, repo, ref, forceRefresh); },
+		viewRepo(repo, ref = '', forceRefresh = false) { this.depsLimit = 200; return scans.viewRepo(this, repo, ref, forceRefresh); },
 		checkVulns() { return vulns.checkVulns(this); },
 
 		getWorstLevel(idx) { return vulns.getWorstLevel(this.vulnerabilities, idx); },

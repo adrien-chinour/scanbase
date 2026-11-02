@@ -34,7 +34,7 @@ export function parseInput(raw) {
 					return { repo: owner + '/' + repo, ref: '', path: '' };
 				}
 			}
-		} catch (e) {}
+		} catch (e) { /* not a URL, fall through */ }
 	}
 	const parts = s.split(/\s+/);
 	const first = parts[0];

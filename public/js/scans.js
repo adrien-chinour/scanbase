@@ -70,7 +70,7 @@ export async function viewRepo(app, repo, ref = '', forceRefresh = false) {
 	app.status = 'Fetching SBOM from GitHub and checking vulnerabilities…';
 	try {
 		const scan = await api.scanRepo(repo, ref);
-		applyScan(app, scan, 'Scan complete');
+		applyScan(app, scan, scan.reused ? `Dependencies unchanged since ${new Date(scan.scanned_at).toLocaleString()}, vulnerabilities re-checked` : 'Scan complete');
 		await loadScanHistory(app);
 		app.repos = await api.loadRepos();
 	} catch (e) {

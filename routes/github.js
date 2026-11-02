@@ -1,7 +1,7 @@
 const express = require('express');
 const { requireAuth } = require('../lib/auth');
 const { listOrganizations, listOrgRepos, listUserRepos } = require('../lib/github');
-const { createJob, getJob, listJobs } = require('../lib/jobs');
+const { createJob, getJob, listJobs, rescanAll } = require('../lib/jobs');
 const { isValidRepo, HttpError } = require('../lib/utils');
 
 const router = express.Router();
@@ -31,7 +31,14 @@ router.post('/jobs', (req, res) => {
 	if (invalid.length) throw new HttpError(400, `Invalid repository names: ${invalid.slice(0, 5).join(', ')}`);
 	if (!repos.length) throw new HttpError(400, 'No repositories provided');
 	if (repos.length > MAX_IMPORT) throw new HttpError(400, `Too many repositories (max ${MAX_IMPORT} per job)`);
-	const job = createJob({ type: 'import', items: repos.map(repo => ({ repo, token: req.user.token })), userId: req.user.id });
+	const job = createJob({ type: 'import', items: repos.map(repo => ({ repo })), userId: req.user.id });
+	res.status(202).json({ job });
+});
+
+// Rescan every known repository now.
+router.post('/jobs/rescan', (req, res) => {
+	const job = rescanAll({ userId: req.user.id });
+	if (!job) throw new HttpError(400, 'No repository to rescan yet');
 	res.status(202).json({ job });
 });
 

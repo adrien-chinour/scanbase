@@ -35,6 +35,7 @@
                 <div class="actions" style="margin-top:12px;">
                     <button @click="scanRepo()" :disabled="loading || !auth.authenticated">Scan Repository</button>
                     <button @click="openImport()" :disabled="loading || !auth.authenticated" class="secondary">Import from organization…</button>
+                    <button x-show="repos.length > 0" @click="rescanAll()" :disabled="loading || activeJobs().length > 0" class="secondary">Rescan all</button>
                 </div>
                 <div x-show="!auth.authenticated" class="hint" style="margin-top: 8px;">
                     Sign in with GitHub to scan repositories and browse the shared results.
@@ -183,6 +184,53 @@
                         </template>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- Organization-wide vulnerabilities -->
+        <div x-show="auth.authenticated && orgVulns.length > 0" class="card" style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
+                <h2 style="margin: 0; font-size: 16px;">Vulnerabilities across repositories</h2>
+                <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+                    <template x-for="level in ['critical', 'high', 'medium', 'low']" :key="level">
+                        <span x-show="orgVulnCounts[level] > 0" :class="`pill ${level}`" style="cursor: pointer;" :style="orgVulnLevel && orgVulnLevel !== level ? 'opacity: 0.4' : ''"
+                              @click="orgVulnLevel = orgVulnLevel === level ? '' : level; orgVulnsOpen = true" x-text="`${orgVulnCounts[level]} ${level}`"></span>
+                    </template>
+                    <button @click="orgVulnsOpen = !orgVulnsOpen" class="secondary" style="padding: 4px 8px; font-size: 12px;" x-text="orgVulnsOpen ? 'Hide' : 'Show'"></button>
+                </div>
+            </div>
+            <div x-show="orgVulnsOpen" class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 20%;">Advisory</th>
+                            <th style="width: 10%;">Severity</th>
+                            <th>Summary</th>
+                            <th style="width: 12%;">Repositories</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="v in filteredOrgVulns()" :key="v.id">
+                            <tr>
+                                <td :class="`row-${v.level}`">
+                                    <a x-show="v.url" :href="v.url" target="_blank" rel="noopener" style="font-weight: 600;" x-text="v.displayId || v.id"></a>
+                                    <span x-show="!v.url" style="font-weight: 600;" x-text="v.displayId || v.id"></span>
+                                </td>
+                                <td><span :class="`pill ${v.level || 'medium'}`" x-text="v.level ? `${v.level}${v.score ? ' ' + v.score : ''}` : 'unknown'"></span></td>
+                                <td>
+                                    <div x-text="v.summary"></div>
+                                    <div x-show="expandedVuln === v.id" style="margin-top: 6px; font-size: 12px;">
+                                        <template x-for="a in v.affected" :key="a.repo + a.ref + a.dependency + a.version">
+                                            <div><span class="link" @click="viewRepo(a.repo, a.ref || '')" x-text="a.repo"></span><span x-show="a.ref" class="hint" x-text="`@${a.ref}`"></span> · <code x-text="`${a.dependency}@${a.version || '?'}`"></code></div>
+                                        </template>
+                                    </div>
+                                </td>
+                                <td><span class="link" @click="expandedVuln = expandedVuln === v.id ? null : v.id" x-text="`${v.repo_count} repo${v.repo_count > 1 ? 's' : ''}`"></span></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+                <div x-show="orgVulns.filter(v => !orgVulnLevel || v.level === orgVulnLevel).length > 200" class="hint" style="margin-top: 8px;">Showing the first 200 advisories. Use the severity filter to narrow down.</div>
             </div>
         </div>
 
@@ -466,7 +514,7 @@
                             </tr>
                         </thead>
                         <tbody>
-                            <template x-for="(dep, idx) in getFilteredAndSortedDeps()" :key="idx">
+                            <template x-for="(dep, idx) in getFilteredAndSortedDeps().slice(0, depsLimit)" :key="idx">
                                 <tr :class="getRowClass(dep)">
                                     <td x-text="dep.name"></td>
                                     <td x-text="dep.version"></td>
@@ -499,6 +547,9 @@
                             </template>
                         </tbody>
                     </table>
+                </div>
+                <div x-show="getFilteredAndSortedDeps().length > depsLimit" class="actions" style="margin-top: 12px;">
+                    <button class="secondary" @click="depsLimit += 500" x-text="`Show more (${formatNumber(getFilteredAndSortedDeps().length - depsLimit)} remaining)`"></button>
                 </div>
             </div>
             

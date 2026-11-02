@@ -25,6 +25,7 @@ app.use((req, res, next) => {
 	next();
 });
 
+app.get('/healthz', (req, res) => res.json({ ok: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json({ limit: '256kb' }));
 app.use((req, res, next) => { dlog(req.method, req.path); next(); });

@@ -10,7 +10,8 @@ ScanBase pulls the SBOM of every repository you select straight from the GitHub 
 
 - **Organization import** - Pick repositories from any organization you belong to and scan them in the background.
 - **Vulnerability check on every scan** - Dependencies are matched against OSV.dev (npm, Maven, PyPI, Go, Packagist, NuGet, RubyGems, crates.io, Hex, Pub, Swift, GitHub Actions).
-- **Scheduled rescans** - Re-check every known repository on an interval, so new advisories show up without anyone clicking.
+- **Scheduled rescans and alerts** - Re-check every known repository on an interval and post new critical/high findings to a webhook (Slack-compatible).
+- **Organization-wide vulnerability view** - Every advisory found across the latest scans, with the repositories it affects.
 - **Cross-repository search** - Regex search over the dependencies of all scanned repositories ("who still uses `log4j`?").
 - **Custom rules** - Flag internal packages as vulnerable or deprecated, with exact or regex purl matching.
 - **Scan history** - Keep previous scans per repository and branch, compare and delete them.
@@ -38,6 +39,7 @@ ScanBase pulls the SBOM of every repository you select straight from the GitHub 
    ```bash
    docker compose up -d
    ```
+   The compose file uses the prebuilt image `ghcr.io/adrien-chinour/scanbase:latest`; uncomment `build: .` to build locally.
 4. Open the app, sign in with GitHub, click **Import from organization…**, select repositories, start the scan.
 
 Put it behind a reverse proxy with TLS (Caddy, Traefik, nginx) and keep `TRUST_PROXY=true`.
@@ -61,6 +63,7 @@ npm start
 | `ALLOWED_LOGINS` | no | | Comma-separated GitHub logins always allowed |
 | `GITHUB_TOKEN` | no | | Token used for scheduled rescans (fine-grained PAT with *Contents: read*). Otherwise the token of the user who last scanned each repository is reused |
 | `RESCAN_INTERVAL_HOURS` | no | `0` | Rescan every known repository on this interval. `0` disables it |
+| `WEBHOOK_URL` | no | | Receives a JSON POST (Slack-compatible `text` field) when a job finds new critical/high vulnerabilities |
 | `PORT` | no | `3000` | HTTP port |
 | `DATA_DIR` | no | `./data` | Directory of the SQLite database |
 | `TRUST_PROXY` | no | | `true` behind a reverse proxy (needed for correct rate limiting) |
@@ -74,7 +77,7 @@ If neither `ALLOWED_ORG` nor `ALLOWED_LOGINS` is set, **anyone with a GitHub acc
 1. **Sign in** with GitHub OAuth. ScanBase asks for the `repo` scope (to read the SBOM of private repositories) and `read:org` (to list organizations and check membership). The token is stored encrypted and only ever used server-side.
 2. **Scan**: for each repository, ScanBase calls the [Dependency Graph SBOM API](https://docs.github.com/en/rest/dependency-graph/sboms), stores the dependency list, then queries OSV.dev in batches and fetches advisory details (cached for 24 hours). Custom rules are applied in the same pass.
 3. **Browse**: the repository list shows the latest scan of each repository with its critical/high counts. The details page lists dependencies, a vulnerability report grouped by severity, and the scan history.
-4. **Rescan**: manually from the UI, or automatically with `RESCAN_INTERVAL_HOURS`.
+4. **Rescan**: manually from the UI, or automatically with `RESCAN_INTERVAL_HOURS`. A rescan whose dependency list is unchanged refreshes the vulnerabilities of the existing scan instead of adding a new entry to the history. Background jobs pause when the GitHub rate limit runs low and resume after a restart.
 
 Everything lives in one SQLite file (`DATA_DIR/sbom.db`). Back it up by copying the file.
 
@@ -93,6 +96,9 @@ All `/api` routes require a session cookie obtained through `/login`. The main o
 | `DELETE` | `/api/scans/:id` | Delete a scan |
 | `GET` | `/api/repos/:owner/:name/scans` | Scan history |
 | `GET` | `/api/search?pattern=` | Regex search across latest scans |
+| `GET` | `/api/vulnerabilities` | Advisories across all latest scans with affected repositories |
+| `POST` | `/api/jobs/rescan` | Rescan every known repository now |
+| `GET` | `/healthz` | Liveness check (no auth, no rate limit) |
 | `GET` | `/api/github/orgs`, `/api/github/repos?owner=` | Browse GitHub |
 | `POST` | `/api/jobs` `{repos: []}` | Queue a background scan of many repositories |
 | `GET` | `/api/jobs`, `/api/jobs/:id` | Job progress |
@@ -105,6 +111,7 @@ All `/api` routes require a session cookie obtained through `/login`. The main o
 npm ci
 cp .env.example .env
 npm run dev      # restarts on change, DEBUG logging
+npm run lint     # ESLint
 npm test         # unit + API tests (the scan test talks to OSV.dev; SKIP_NETWORK_TESTS=true to skip it)
 ```
 

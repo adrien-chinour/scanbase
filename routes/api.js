@@ -63,7 +63,7 @@ router.post('/scans', wrap(async (req, res) => {
 	const repo = String((req.body && req.body.repo) || '').trim();
 	const ref = String((req.body && req.body.ref) || '').trim() || null;
 	const summary = await scanRepository({ repo, ref, token: req.user.token, userId: req.user.id });
-	res.status(201).json(getScanDetails(summary.id));
+	res.status(summary.reused ? 200 : 201).json({ ...getScanDetails(summary.id), reused: summary.reused });
 }));
 
 router.post('/scans/:id/vulns', wrap(async (req, res) => {
@@ -114,6 +114,35 @@ router.get('/search', (req, res) => {
 		}
 	}
 	res.json({ pattern, results, total: results.length });
+});
+
+// Organization-wide view: every advisory found in the latest scans, with the repositories it affects.
+router.get('/vulnerabilities', (req, res) => {
+	const rows = db.prepare(`
+		SELECT v.vuln_id AS id, v.display_id AS displayId, v.level, v.score, v.summary, v.url,
+			r.full_name AS repo, s.ref, s.id AS scan_id, d.name AS dependency, d.version
+		FROM vulnerabilities v
+		JOIN scans s ON s.id = v.scan_id
+		JOIN repos r ON r.id = s.repo_id
+		LEFT JOIN dependencies d ON d.id = v.dependency_id
+		WHERE s.id IN (${LATEST_SCANS_SQL})
+		ORDER BY r.full_name, d.name
+	`).all();
+	const rank = { critical: 4, high: 3, medium: 2, low: 1, deprecation: 0 };
+	const byId = new Map();
+	for (const row of rows) {
+		let entry = byId.get(row.id);
+		if (!entry) {
+			entry = { id: row.id, displayId: row.displayId, level: row.level, score: row.score, summary: row.summary, url: row.url, affected: [] };
+			byId.set(row.id, entry);
+		}
+		entry.affected.push({ repo: row.repo, ref: row.ref, scan_id: row.scan_id, dependency: row.dependency, version: row.version });
+	}
+	const vulnerabilities = [...byId.values()].map(e => ({ ...e, repo_count: new Set(e.affected.map(a => a.repo)).size }))
+		.sort((a, b) => (rank[b.level] || 0) - (rank[a.level] || 0) || b.repo_count - a.repo_count || (parseFloat(b.score) || 0) - (parseFloat(a.score) || 0));
+	const counts = { critical: 0, high: 0, medium: 0, low: 0, deprecation: 0, unknown: 0 };
+	for (const v of vulnerabilities) counts[v.level in counts ? v.level : 'unknown']++;
+	res.json({ vulnerabilities, counts });
 });
 
 module.exports = router;

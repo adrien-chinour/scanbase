@@ -10,7 +10,7 @@ process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:
 process.on('uncaughtException', (err) => { console.error('Uncaught exception:', err); setTimeout(() => process.exit(1), 500); });
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
-const CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; connect-src 'self';";
+const CSP = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; connect-src 'self';";
 
 const app = express();
 app.disable('x-powered-by');
